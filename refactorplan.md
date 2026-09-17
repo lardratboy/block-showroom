@@ -217,7 +217,8 @@ Order chosen so each extraction only imports things already extracted.
       pass them as parameters for now (`exportSpecimenOBJ({ cache, focus })`).
 - [x] `ui/permalink.js` — `readHash/writeHash/commitHash/hashString`. Same
       parameter-passing approach.
-- [ ] `perf.js` — `Perf` object and the `window.*` install.
+- [x] `perf.js` — `Perf` object and the `window.*` install. `snapshot()`
+      merges an app-state probe that `main.js` registers; output shape unchanged.
 
 Exit criterion: `main.js` is down to scene, rig, virtualiser, generation,
 layout, labels, HUD, input, controls, levels editor, loop.

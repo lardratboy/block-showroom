@@ -9,6 +9,7 @@ import { symmetryLabel, specimenChiral, geometryFromArrays, blockGeometry, cellW
 import { FLOOR_VERT, FLOOR_FRAG } from './scene/floor-shader.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
 import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
+import { Perf, installPerformanceDiagnostics } from './perf.js';
 
 "use strict";
 
@@ -319,44 +320,17 @@ function evict(){
 }
 
 
-// Bounded diagnostics, available from the console as showroomPerformance().
-const Perf = {
-  frames: new Float64Array(2048), count: 0, cursor: 0, longFrames: 0,
-  phases: {}, discarded: 0, installed: 0, maxUploadBytes:0, epochStarted: performance.now(), populationMs: null,
-  sample(name, ms){
-    const p = this.phases[name] || (this.phases[name] = { count:0, total:0, max:0 });
-    p.count++; p.total += ms; p.max = Math.max(p.max, ms);
-  },
-  frame(ms){
-    this.frames[this.cursor++ % this.frames.length] = ms;
-    this.count = Math.min(this.count + 1, this.frames.length);
-    if (ms > 50) this.longFrames++;
-  },
-  reset(){
-    this.count = this.cursor = this.longFrames = this.discarded = this.installed = this.maxUploadBytes = 0;
-    this.phases = {}; this.epochStarted = performance.now(); this.populationMs = null;
-  },
-  snapshot(){
-    const f = Array.from(this.frames.subarray(0, this.count)).sort((a,b) => a-b);
-    const phases = {};
-    for (const [name,p] of Object.entries(this.phases))
-      phases[name] = { count:p.count, meanMs:p.total/p.count, maxMs:p.max };
-    return { frames:f.length, medianMs:f[Math.floor(f.length*.5)] || 0,
-      p95Ms:f[Math.min(f.length-1, Math.floor(f.length*.95))] || 0,
-      longFrames:this.longFrames, populationMs:this.populationMs, phases,
-      discarded:this.discarded, installed:this.installed, maxUploadBytes:this.maxUploadBytes,
-      pendingUploads:[...slots.values()].filter(s => s.awaitingUpload).length,
-      workers:Generation.pool.filter(s => !s.dead).length, mode:Generation.mode,
-      pending:Generation.pending.size, readyResults:Generation.results.length,
-      readyBytes:Generation.results.reduce((n,r) => n + r.bytes, 0),
-      reservedBytes:Generation.pool.reduce((n,s) => n + (s.job ? s.job.estimate : 0), 0),
-      residentBytes:cacheBytes, cacheOverBudget:cacheBytes > CFG.CACHE_BYTES,
-      visible:visible.length, missing:visible.filter(c => !cache.has(c.key)).length,
-      drawCalls:renderer.info.render.calls, triangles:renderer.info.render.triangles };
-  }
-};
-window.showroomPerformance = () => Perf.snapshot();
-window.resetShowroomPerformance = () => Perf.reset();
+// Console diagnostics (perf.js); the probe supplies this app's live fields.
+installPerformanceDiagnostics(() => ({
+  pendingUploads:[...slots.values()].filter(s => s.awaitingUpload).length,
+  workers:Generation.pool.filter(s => !s.dead).length, mode:Generation.mode,
+  pending:Generation.pending.size, readyResults:Generation.results.length,
+  readyBytes:Generation.results.reduce((n,r) => n + r.bytes, 0),
+  reservedBytes:Generation.pool.reduce((n,s) => n + (s.job ? s.job.estimate : 0), 0),
+  residentBytes:cacheBytes, cacheOverBudget:cacheBytes > CFG.CACHE_BYTES,
+  visible:visible.length, missing:visible.filter(c => !cache.has(c.key)).length,
+  drawCalls:renderer.info.render.calls, triangles:renderer.info.render.triangles
+}));
 const perfOptions = new URLSearchParams(location.search);
 const forceFullGeometry = perfOptions.get('fullGeometry') === '1';
 const requestedWorkers = perfOptions.has('workers') ? Number(perfOptions.get('workers')) : null;
