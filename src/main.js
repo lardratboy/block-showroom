@@ -10,6 +10,7 @@ import { Perf, installPerformanceDiagnostics } from './perf.js';
 import { ShowroomScene } from './scene/scene.js';
 import { CameraRig } from './scene/rig.js';
 import { Virtualiser } from './scene/virtualiser.js';
+import { LabelOverlay } from './scene/labels.js';
 import { GenerationPool } from './lattice/generation.js';
 
 "use strict";
@@ -246,67 +247,9 @@ function layout(t, dt){
 }
 
 /* =====================================================================
-   FLOOR LABELS — a 2D overlay rather than sprites, so the type stays
-   crisp at any zoom and costs one canvas pass instead of N textures.
+   FLOOR LABELS — scene/labels.js
    ===================================================================== */
-const labelCanvas = document.getElementById('labels');
-const lctx = labelCanvas.getContext('2d');
-let labelsDirty = true;
-const labelPose = { x:NaN, z:NaN, h:NaN, tilt:NaN, yaw:NaN };
-let labelRevision = -1;
-
-function sizeLabels(){
-  labelsDirty = true;
-  const dpr = Math.min(window.devicePixelRatio, 2);
-  labelCanvas.width  = Math.floor(window.innerWidth  * dpr);
-  labelCanvas.height = Math.floor(window.innerHeight * dpr);
-  labelCanvas.style.width  = window.innerWidth  + 'px';
-  labelCanvas.style.height = window.innerHeight + 'px';
-  lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-sizeLabels();
-
-function drawLabels(){
-  // The rig does not notify anyone it moved; compare its pose with the one
-  // these labels were last drawn for.
-  if (labelPose.x !== rig.x || labelPose.z !== rig.z || labelPose.h !== rig.h
-      || labelPose.tilt !== rig.tilt || labelPose.yaw !== rig.yaw){
-    labelsDirty = true;
-    labelPose.x=rig.x; labelPose.z=rig.z; labelPose.h=rig.h; labelPose.tilt=rig.tilt; labelPose.yaw=rig.yaw;
-  }
-  if (labelRevision !== virtualiser.revision){ labelsDirty = true; labelRevision = virtualiser.revision; }
-  if (!labelsDirty) return;
-  labelsDirty = false;
-  lctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-  if (!State.labels || rig.h > 30) return;
-
-  const detail = rig.h < 13;
-  lctx.textAlign = 'center';
-  lctx.textBaseline = 'middle';
-  lctx.font = '9px ui-monospace, Menlo, Consolas, monospace';
-
-  let n = 0;
-  for (const c of virtualiser.visible){
-    if (n > 220) break;
-    const p = virtualiser.cache.get(c.key);
-    if (!p) continue;
-    _p3.set(cellWorldX(c.i), 0.02, cellWorldZ(c.j) + CFG.CELL * 0.46);
-    _p3.project(camera);
-    if (_p3.z > 1) continue;
-    const sx = (_p3.x * 0.5 + 0.5) * window.innerWidth;
-    const sy = (-_p3.y * 0.5 + 0.5) * window.innerHeight;
-    if (sx < -60 || sy < -20 || sx > window.innerWidth + 60 || sy > window.innerHeight + 20) continue;
-
-    const isFocus = (c.i === Focus.i && c.j === Focus.j);
-    lctx.fillStyle = isFocus ? 'rgba(0,245,212,0.92)' : 'rgba(170,198,255,0.36)';
-    lctx.fillText(c.i + ',' + c.j, sx, sy);
-    if (detail){
-      lctx.fillStyle = isFocus ? 'rgba(255,62,165,0.85)' : 'rgba(150,178,240,0.22)';
-      lctx.fillText(ARCH_NAMES[p.arch] + ' · ' + symmetryLabel(p,true), sx, sy + 11);
-    }
-    n++;
-  }
-}
+const labels = new LabelOverlay(document.getElementById('labels'), rig, virtualiser);
 
 /* =====================================================================
    STATE, FOCUS, HUD
@@ -394,7 +337,7 @@ function unpin(){
 }
 
 function setFocus(i, j, announce){
-  labelsDirty = true;
+  labels.markDirty();
   Focus.i = i; Focus.j = j;
   if (Bloom.on) pinAt(i, j);
   refreshInspector();
@@ -774,7 +717,7 @@ btnBloom.addEventListener('click', () => {
 });
 btnLabels.addEventListener('click', () => {
   State.labels = !State.labels;
-  labelsDirty = true;
+  labels.markDirty();
   btnLabels.classList.toggle('on', State.labels);
 });
 btnKey.addEventListener('click', () => {
@@ -828,7 +771,7 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('resize', () => {
   stage.resize();
-  sizeLabels();
+  labels.resize();
   virtualiser.invalidate();
 });
 
@@ -918,7 +861,7 @@ function frame(){
   stage.render();
   Perf.sample('main.renderSubmission', performance.now() - renderStarted);
   const labelStarted = performance.now();
-  drawLabels();
+  labels.draw();
   Perf.sample('main.labels', performance.now() - labelStarted);
 }
 
