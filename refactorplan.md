@@ -279,12 +279,32 @@ height sampled mid-glide, and total install/draw-call counts).
 
 ### Phase 5 — Optional hardening (only if wanted)
 
-- [ ] JSDoc `@typedef` for `Recipe`, `Level`, `BlockData`, `Job` so editors
-      give completion without a TypeScript build.
+- [x] JSDoc `@typedef` for `Recipe`, `Level`, `BlockData`, `Job` so editors
+      give completion without a TypeScript build. → `src/types.js` (typedefs
+      only, no runtime code; also `Kin`, `CellRecipe`, `MeshArrays`,
+      `BuildResult`, `JobMessage`), referenced by `@param`/`@returns`/`@type`
+      tags at the boundaries: `buildBlock`, `meshArrays`, `runNumericJob`,
+      `cellParams`, `cellRecipe`, `Virtualiser.cache/at/install`,
+      `GenerationPool.pending/_nextJob`, `Tier.levels`. Checked with
+      `tsc --checkJs` that the typedefs parse and the `JobMessage` union is
+      exhaustive; the project still has no TypeScript build.
 - [ ] Move `three` / tween to npm + Vite; add `vite build` to produce a
       single-file bundle if a one-file deliverable still matters.
-- [ ] Browser-level test with Playwright: load `#0,0`, wait for
+      **Not done, deliberately**: it reverses the buildless decision above
+      and would add `node_modules` and an install step for the only benefit
+      of a one-file deliverable, which nobody has asked for. If the CDN
+      import map ever becomes a problem, the cheaper fix is to vendor
+      `three.module.js` and `tween.esm.js` into `vendor/` and point the
+      import map there (no bundler needed).
+- [x] Browser-level test: load `#0,0`, wait for
       `showroomPerformance().installed > 0`, assert inspector text.
+      → `npm run test:browser` (`test/browser/`). Written against the
+      DevTools protocol on the installed Chrome via Node 22's built-in
+      `fetch`/`WebSocket` instead of Playwright, so it needs no install.
+      Covers the workers path (`#0,0,15.0,0`) and the `?workers=0`
+      compatibility path (`#7,-3,12.0,3,7.-3.4`), asserting seed, voxel
+      counts and aut-order against the Phase 2/3 reference values. ~20 s;
+      skips when no Chrome is found.
 
 ---
 
