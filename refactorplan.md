@@ -203,7 +203,7 @@ Order chosen so each extraction only imports things already extracted.
 
 - [x] `config.js` — `CFG`, `ROLES`, `ROLE_BY_ID`, `GROUP_COLORS`, `GROUP_RGB`,
       `TAU`, `MAX_R`, the preset table from the levels editor, `clamp/imod/idiv`.
-- [ ] `state.js` — export the plain objects `Axis`, `Filter`, `Mint`, `Pin`,
+- [x] `state.js` — export the plain objects `Axis`, `Filter`, `Mint`, `Pin`,
       `Focus`, `Hover`, `Bloom`, `State`, and `let`-bindings `Levels`,
       `TierSymmetry` wrapped in an object so they can be reassigned across
       modules (`export const Tier = { levels: [...], symmetry: false }`).

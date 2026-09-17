@@ -3,11 +3,11 @@ import TWEEN from '@tweenjs/tween.js';
 import { Core } from './core/bimoblock-core.js';
 import { runNumericJob } from './core/jobs.js';
 import { CFG, ROLES, ROLE_BY_ID, GROUP_COLORS, GROUP_RGB, TAU, MAX_R, PRESETS, clamp, imod, idiv } from './config.js';
+import { Axis, Filter, Mint, Tier, Pin, State, Bloom, Focus, Hover } from './state.js';
 
 "use strict";
 
 const { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution } = Core;
-let TierSymmetry = false;
 function symmetryLabel(p, short=false){
   const name=i=>short ? GROUPS[i].name.split(':')[0] : GROUPS[i].name;
   return p.tierSymmetry ? p.levels.map(l=>name(l.sym == null || l.sym < 0 ? p.sym : l.sym)).join(' / ') : name(p.sym);
@@ -25,7 +25,6 @@ function specimenChiral(p){
   }
   return GROUPS[p.sym].chiral;
 }
-let Levels = [{ radix:3, gap:0.30 }, { radix:3, gap:0.06 }];
 
 function geometryFromArrays(data){
   const g = new THREE.BufferGeometry();
@@ -78,10 +77,6 @@ function blockGeometry(occ, tier, filled, levels, R){
       eviction, and drawn from a recycled mesh pool.  The lattice is
       unbounded; the working set is a couple of hundred blocks.
    ===================================================================== */
-
-const Axis   = { x:'arch', y:'sym' };
-const Filter = { sym:-1, arch:-1, field:-1 };
-const Mint   = { gen:0, density:0.25 };
 
 function hash32(a, b){
   let h = ((a | 0) ^ Math.imul((b | 0) + 1, 0x9e3779b1)) >>> 0;
@@ -140,8 +135,6 @@ function cellParams(i, j){
    ===================================================================== */
 const TRAIT_N = { sym:GROUPS.length, arch:ARCH_NAMES.length,
                   field:FIELD_NAMES.length, lift:LIFT_NAMES.length };
-
-const Pin = { on:false, i:0, j:0, radius:4, epoch:0, params:null, want:null };
 
 function axisDelta(role, di, dj){
   if (Axis.x === role) return di;
@@ -702,8 +695,8 @@ function nextGenerationJob(){
   const makeBuild = c => {
     const key = keyOf(c.i,c.j), token = generationToken('build', key);
     if (cache.has(key) || Generation.pending.has(token) || (Generation.failures.get(token)?.tries || 0) >= 2) return null;
-    const rec = cellRecipe(c.i,c.j), levels = Levels.map(l => ({...l})), R = levelResolution(levels);
-    rec.P.tierSymmetry = TierSymmetry;
+    const rec = cellRecipe(c.i,c.j), levels = Tier.levels.map(l => ({...l})), R = levelResolution(levels);
+    rec.P.tierSymmetry = Tier.symmetry;
     return { type:'build', i:c.i, j:c.j, key, token, rec, levels,
       // Six independent quads per cell, 32-bit indices, occupancy, plus the
       // colOrbit buffer alongside the existing gamut one: conservative reservation.
@@ -1009,15 +1002,6 @@ function drawLabels(){
 /* =====================================================================
    STATE, FOCUS, HUD
    ===================================================================== */
-const State = {
-  align: false, labels: true, legend: true,
-  spin: 0.34, haze: 0.42, time: 0,
-  colorMode: 'gamut'   // 'gamut' | 'chiral' — see specimenChiral() below
-};
-const Bloom = { on: false };
-const Focus = { i:0, j:0 };
-const Hover = { i:0, j:0, on:false };
-
 const elCoord   = document.getElementById('coord');
 const elStatus  = document.getElementById('status');
 const elInspect = document.getElementById('inspect');
@@ -1383,11 +1367,11 @@ inDens.addEventListener('input', () => {
 const applyLevels = applyConfiguration;
 const lvRows = document.getElementById('lvrows'), resLine = document.getElementById('resLine');
 
-document.getElementById('tierSymmetry').onchange=e=>{ TierSymmetry=e.target.checked; renderLevelRows(); applyLevels(); };
+document.getElementById('tierSymmetry').onchange=e=>{ Tier.symmetry=e.target.checked; renderLevelRows(); applyLevels(); };
 function tierExample(outer,inner){
-  if(Levels.length<2) Levels=[{radix:3,gap:.30},{radix:3,gap:.06}];
-  Levels=Levels.map((l,i)=>({...l,sym:i===0?outer:inner}));
-  TierSymmetry=true; document.getElementById('tierSymmetry').checked=true;
+  if(Tier.levels.length<2) Tier.levels=[{radix:3,gap:.30},{radix:3,gap:.06}];
+  Tier.levels=Tier.levels.map((l,i)=>({...l,sym:i===0?outer:inner}));
+  Tier.symmetry=true; document.getElementById('tierSymmetry').checked=true;
   renderLevelRows(); applyLevels();
 }
 document.getElementById('tierMirrorSpin').onclick=()=>tierExample(1,5);
@@ -1395,16 +1379,16 @@ document.getElementById('tierCubeFree').onclick=()=>tierExample(9,0);
 
 function renderLevelRows(){
   lvRows.innerHTML = '';
-  Levels.forEach((lv, i) => {
+  Tier.levels.forEach((lv, i) => {
     const row = document.createElement('div'); row.className = 'lvrow';
     row.innerHTML =
-      `<span class="idx">${i===0?'out':(i===Levels.length-1?'in':i)}</span>` +
+      `<span class="idx">${i===0?'out':(i===Tier.levels.length-1?'in':i)}</span>` +
       `<input type="number" min="2" max="12" value="${lv.radix}" data-i="${i}" class="radixIn">` +
       `<input type="range" min="0" max="100" value="${Math.round(lv.gap*100)}" data-i="${i}" class="gapIn" title="Sibling spacing at this tier (% of child width)">` +
       `<span class="gapv">${lv.gap.toFixed(2)}</span>` +
       `<button data-i="${i}" class="delBtn" title="remove this level">×</button>`;
     const select=document.createElement('select');
-    select.className='tierGroup'; select.disabled=!TierSymmetry;
+    select.className='tierGroup'; select.disabled=!Tier.symmetry;
     select.setAttribute('aria-label',`Tier ${i+1} symmetry`);
     select.add(new Option('inherit specimen group', '-1'));
     GROUPS.forEach((g,j)=>select.add(new Option(g.name+' ('+g.order+')',String(j))));
@@ -1413,68 +1397,68 @@ function renderLevelRows(){
     row.appendChild(select);
     lvRows.appendChild(row);
   });
-  const R = levelResolution(Levels);
+  const R = levelResolution(Tier.levels);
   resLine.textContent = `R=${R} · ${(R*R*R).toLocaleString()} cells`;
 
   lvRows.querySelectorAll('.radixIn').forEach(el => el.onchange = e => {
     const i = +e.target.dataset.i, want = Math.max(2, Math.min(12, parseInt(e.target.value) || 2));
-    const trial = Levels.map((l,k) => k===i ? { ...l, radix:want } : l);
+    const trial = Tier.levels.map((l,k) => k===i ? { ...l, radix:want } : l);
     if (levelResolution(trial) > MAX_R){
       console.warn(`[bimoblock] radix change rejected: R would exceed MAX_R=${MAX_R}`);
       setStatus(`too large — R capped at ${MAX_R}`);
-      e.target.value = Levels[i].radix;
+      e.target.value = Tier.levels[i].radix;
       return;
     }
-    Levels[i].radix = want;
+    Tier.levels[i].radix = want;
     renderLevelRows();
-    setStatus(`levels [${Levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Levels)}`);
+    setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
     applyLevels();
   });
   lvRows.querySelectorAll('.gapIn').forEach(el => el.oninput = e => {
     const i = +e.target.dataset.i;
-    Levels[i].gap = (+e.target.value) / 100;
-    e.target.parentElement.querySelector('.gapv').textContent = Levels[i].gap.toFixed(2);
-    setStatus(`${i===0?'outer':i===Levels.length-1?'inner':'level '+i} tier gap ${Math.round(Levels[i].gap*100)}%`);
+    Tier.levels[i].gap = (+e.target.value) / 100;
+    e.target.parentElement.querySelector('.gapv').textContent = Tier.levels[i].gap.toFixed(2);
+    setStatus(`${i===0?'outer':i===Tier.levels.length-1?'inner':'level '+i} tier gap ${Math.round(Tier.levels[i].gap*100)}%`);
     applyLevels();
   });
   lvRows.querySelectorAll('.delBtn').forEach(el => el.onclick = e => {
-    if (Levels.length <= 1) return;
-    Levels.splice(+e.target.dataset.i, 1);
+    if (Tier.levels.length <= 1) return;
+    Tier.levels.splice(+e.target.dataset.i, 1);
     renderLevelRows();
-    setStatus(`levels [${Levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Levels)}`);
+    setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
     applyLevels();
   });
 }
 document.getElementById('btnAddLevel').addEventListener('click', () => {
-  const trial = [...Levels, { radix:3, gap:0.1 }];
+  const trial = [...Tier.levels, { radix:3, gap:0.1 }];
   if (levelResolution(trial) > MAX_R){
     console.warn(`[bimoblock] add-level rejected: R would exceed MAX_R=${MAX_R}`);
     setStatus(`too large — R capped at ${MAX_R}`);
     return;
   }
-  Levels.push({ radix:3, gap:0.1 });
+  Tier.levels.push({ radix:3, gap:0.1 });
   renderLevelRows();
-  setStatus(`levels [${Levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Levels)}`);
+  setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
   applyLevels();
 });
 document.getElementById('btnDelLevel').addEventListener('click', () => {
-  if (Levels.length <= 1) return;
-  Levels.pop();
+  if (Tier.levels.length <= 1) return;
+  Tier.levels.pop();
   renderLevelRows();
-  setStatus(`levels [${Levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Levels)}`);
+  setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
   applyLevels();
 });
 document.querySelectorAll('#levelsPanel .presets button').forEach(b => b.addEventListener('click', () => {
   const p = b.dataset.preset;
-  const next = PRESETS[p] || Levels;
+  const next = PRESETS[p] || Tier.levels;
   if (levelResolution(next) > MAX_R){
     console.warn(`[bimoblock] preset '${p}' rejected: R=${levelResolution(next)} exceeds MAX_R=${MAX_R}`);
     setStatus(`preset too large — R capped at ${MAX_R}`);
     return;
   }
-  Levels = next.map((l,i)=>({...l,sym:Levels[i]?.sym ?? -1}));
+  Tier.levels = next.map((l,i)=>({...l,sym:Tier.levels[i]?.sym ?? -1}));
   renderLevelRows();
-  setStatus(`levels [${Levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Levels)}`);
+  setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
   applyLevels();
 }));
 renderLevelRows();
@@ -1679,7 +1663,7 @@ function exportSheetOBJ(){
     `# generated: ${new Date().toISOString()}`,
     `# centre cell: ${Math.round(Rig.x / CFG.CELL)}, ${Math.round(-Rig.z / CFG.CELL)}   generation: ${Mint.gen}`,
     `# axes: x → ${ROLE_BY_ID[Axis.x].label}   y → ${ROLE_BY_ID[Axis.y].label}`,
-    `# levels: [${Levels.map(l=>l.radix).join('×')}]  gaps: [${Levels.map(l=>l.gap.toFixed(2)).join(', ')}]`,
+    `# levels: [${Tier.levels.map(l=>l.radix).join('×')}]  gaps: [${Tier.levels.map(l=>l.gap.toFixed(2)).join(', ')}]`,
     `# format: v X Y Z R G B (normalized local gamut colors), vn NX NY NZ, f v1//vn1 v2//vn2 v3//vn3`,
     ""
   ];
