@@ -7,8 +7,8 @@ Tiered voxel object generator — an endless lattice of procedurally generated
 
     npm run serve
 
-then open <http://localhost:8000/>. (Until the module refactor lands you can
-also just open `block-showroom.html` in a browser.)
+then open <http://localhost:8000/>. The app uses ES modules, so it must be
+served over HTTP — opening `index.html` directly from Finder will not work.
 
 ## Test it
 

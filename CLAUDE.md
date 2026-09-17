@@ -1,8 +1,8 @@
 # block-showroom
 
 Procedural "bimoblock" voxel specimens laid out on an endless 2D lattice,
-rendered with Three.js. Currently a single file (`block-showroom.html`);
-being refactored into ES modules per `refactorplan.md`.
+rendered with Three.js. Entry is `index.html` → `src/main.js` (ES module);
+being refactored into smaller modules per `refactorplan.md`.
 
 ## Commands
 

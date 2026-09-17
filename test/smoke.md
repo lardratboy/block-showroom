@@ -1,7 +1,6 @@
 # Manual smoke check (~3 minutes)
 
-Run `npm run serve`, open http://localhost:8000/ (Phase 0: open
-`block-showroom.html` directly instead), then:
+Run `npm run serve`, open http://localhost:8000/, then:
 
 1. Lattice appears; specimens populate outward from the centre.
 2. Drag to pan; wheel to zoom; shift-drag to orbit. Movement has inertia.

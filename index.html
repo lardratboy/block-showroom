@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Bimoblock Showroom — Infinite 2D Lattice</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="sheen"></div>
+<div id="stage"></div>
+<canvas id="labels"></canvas>
+
+<div id="readout">
+  <div class="tag">Bimoblock Showroom</div>
+  <div class="val" id="coord">0, 0</div>
+  <div class="sub" id="status">infinite lattice · drag to roam</div>
+</div>
+
+<div id="legend"></div>
+<div id="inspect"></div>
+
+<div id="levelsPanel">
+  <div class="hd">tier levels (outer → inner)</div>
+  <label class="tierMode"><input id="tierSymmetry" type="checkbox"> independent tier symmetry</label>
+  <div class="tierHint">Each tier acts on its own addresses. “Inherit” follows the specimen group.</div>
+  <div id="lvrows"></div>
+  <div class="rowbtns"><button id="tierMirrorSpin" title="Set outer mirror-X and inner C4 pinwheels">mirror / spin</button><button id="tierCubeFree" title="Set outer octahedral and inner unconstrained">cube / free</button></div>
+  <div class="rowbtns">
+    <button id="btnAddLevel" title="Add an inner tier">+ level</button>
+    <button id="btnDelLevel" title="Remove the innermost tier">− level</button>
+  </div>
+  <div class="presets">
+    <button data-preset="classic" title="Restore the original 3×3 default">classic 3×3</button>
+    <button data-preset="tower3" title="Three levels of radix 3">tower [3,3,3]</button>
+    <button data-preset="tower4" title="Four levels of radix 2">tower [2,2,2,2]</button>
+    <button data-preset="hetero" title="Three levels, decreasing radix">hetero [4,3,2]</button>
+    <button data-preset="n4" title="Two levels of radix 4">N=4 two-tier</button>
+    <button data-preset="n5" title="Single level, radix 5">N=5 single</button>
+  </div>
+  <div class="resline" id="resLine">R=9 · 729 cells</div>
+</div>
+
+<div id="panel">
+  <div class="grp">
+    <button id="home" class="primary" title="Return to the origin cell 0,0">origin</button>
+    <button id="warp" title="Jump to a random distant district of the lattice">warp</button>
+    <input type="text" id="goto" placeholder="i , j" title="Type a lattice address and press enter">
+    <button id="align" title="Freeze every specimen in the same orientation for comparison">align</button>
+    <button id="bloom" title="Repopulate the district around the focused specimen with its relatives">bloom</button>
+    <button id="labelsBtn" class="on" title="Toggle floor address labels">labels</button>
+    <button id="keyBtn" class="on" title="Toggle the symmetry-group colour key">key</button>
+    <button id="shuffle" title="Re-mint the whole lattice with a new master generation">shuffle</button>
+    <button id="expSheet" class="primary" title="Export every visible specimen as one OBJ, laid out on the lattice">sheet obj</button>
+    <button id="expObj" title="Export the focused specimen as OBJ">spec obj</button>
+  </div>
+  <div class="bar"></div>
+  <div class="grp">
+    <select id="axX" title="What the horizontal lattice axis enumerates"></select>
+    <select id="axY" title="What the vertical lattice axis enumerates"></select>
+    <select id="sym"   title="Symmetry group held constant (unless an axis enumerates it)"></select>
+    <select id="arch"  title="Archetype envelope held constant (unless an axis enumerates it)"></select>
+    <select id="field" title="Scalar field held constant (unless an axis enumerates it)"></select>
+    <select id="colorMode" title="How each specimen is colored"></select>
+  </div>
+  <div class="bar"></div>
+  <div class="grp">
+    <label class="slider" title="Procedural generation voxel density fill quantile"><span>density</span><input type="range" id="dens" min="6" max="70" value="25"></label>
+    <label class="slider" title="Lattice pitch"><span>pitch</span><input type="range" id="pitch" min="16" max="46" value="26"></label>
+    <label class="slider" title="Specimen size"><span>size</span><input type="range" id="size" min="60" max="180" value="118"></label>
+    <label class="slider" title="Camera pitch, 90 is a flat contact sheet"><span>tilt</span><input type="range" id="tilt" min="30" max="88" value="52"></label>
+    <label class="slider" title="Idle rotation rate"><span>spin</span><input type="range" id="spin" min="0" max="100" value="34"></label>
+    <label class="slider" title="Distance haze"><span>haze</span><input type="range" id="haze" min="0" max="100" value="42"></label>
+    <label class="slider" title="Radius of the sibling district, in cells"><span>kin</span><input type="range" id="kin" min="2" max="8" value="4"></label>
+    <label class="slider" title="How many specimens the horizon holds at once"><span>horizon</span><input type="range" id="horizon" min="120" max="480" step="12" value="336"></label>
+  </div>
+</div>
+
+<div id="hint">drag to roam &nbsp;·&nbsp; wheel zoom &nbsp;·&nbsp; shift-drag orbit &nbsp;·&nbsp; click a cell to focus &nbsp;·&nbsp; arrows step &nbsp;·&nbsp; [ ] focus
+<br>A align &nbsp;·&nbsp; B bloom &nbsp;·&nbsp; L labels &nbsp;·&nbsp; K key &nbsp;·&nbsp; G shuffle &nbsp;·&nbsp; H origin &nbsp;·&nbsp; C copy address &nbsp;·&nbsp; O obj &nbsp;·&nbsp; E sheet</div>
+
+<div id="toast"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js",
+    "@tweenjs/tween.js": "https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.esm.js"
+  }
+}
+</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

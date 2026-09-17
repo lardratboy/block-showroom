@@ -147,8 +147,8 @@ Exit criterion: golden hashes committed; smoke checklist passes on `main`.
 
 ### Phase 1 — Split the file, no logic change
 
-- [ ] `index.html`: markup only. Move CSS to `styles.css`.
-- [ ] Replace the two CDN `<script>` tags with an import map:
+- [x] `index.html`: markup only. Move CSS to `styles.css`.
+- [x] Replace the two CDN `<script>` tags with an import map:
       ```html
       <script type="importmap">
       { "imports": {
@@ -158,13 +158,13 @@ Exit criterion: golden hashes committed; smoke checklist passes on `main`.
       </script>
       <script type="module" src="src/main.js"></script>
       ```
-- [ ] `src/main.js`: the whole `<script>` body verbatim, with
+- [x] `src/main.js`: the whole `<script>` body verbatim, with
       `import * as THREE from 'three'` and `import TWEEN from '@tweenjs/tween.js'`
       at the top. Fix the only thing that breaks: module scope means
       top-level `function`/`const` are no longer on `window`; anything the
       HTML or console relied on being global (`showroomPerformance`) is
       already assigned to `window` explicitly — verify nothing else was.
-- [ ] Verify: smoke checklist, `showroomPerformance()` still works,
+- [x] Verify: smoke checklist, `showroomPerformance()` still works,
       `?workers=0` and default both work. (The Blob worker still works here
       because the core is still a plain function inside `main.js`.)
 
