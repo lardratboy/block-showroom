@@ -208,8 +208,10 @@ Order chosen so each extraction only imports things already extracted.
       `TierSymmetry` wrapped in an object so they can be reassigned across
       modules (`export const Tier = { levels: [...], symmetry: false }`).
       This commit is mostly a find-and-replace of `Levels` → `Tier.levels`.
-- [ ] `lattice/recipe.js` — `hash32`, `cellParams`, `cellRecipe`, `lodOf`,
-      `symmetryLabel`, `specimenChiral`, `geometryFromArrays`, `blockGeometry`.
+- [x] `lattice/recipe.js` — `hash32`, `cellParams`, `cellRecipe`,
+      `symmetryLabel`, `specimenChiral`, `geometryFromArrays`, `blockGeometry`,
+      plus `cellWorldX/Z`. `lodOf` stayed in `main.js`: it books `cacheBytes`,
+      so it belongs to the virtualiser (Phase 4), not to a stateless module.
 - [ ] `scene/floor-shader.js` — the two GLSL strings.
 - [ ] `export/obj.js` — exporters. They need `cache`, `Focus`, `visible`;
       pass them as parameters for now (`exportSpecimenOBJ({ cache, focus })`).
