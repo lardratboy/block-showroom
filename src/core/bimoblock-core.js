@@ -184,6 +184,7 @@ const NATIVE_FIELDS = 4;
    ===================================================================== */
 
 
+/** @param {import('../types.js').Level[]} levels */
 function levelResolution(levels){ return levels.reduce((p, l) => p * l.radix, 1); }
 function decomposeDigits(u, levels){
   const L = levels.length, digits = new Array(L);
@@ -507,6 +508,8 @@ function tierField(sx, sy, sz, mode, effSeed, levels, R){
   return c0*B[0] + c1*B[1] + c2*B[2] + 0.28*(A[0]*B[1] + A[1]*B[2] + A[2]*B[0]);
 }
 
+/** Number of the 48 Oh elements that map the occupancy onto itself.
+ *  @param {Uint8Array} occ @param {number} R @returns {number} */
 function autOrder(occ, R){
   const half = (R - 1) / 2;
   let n = 0;
@@ -567,6 +570,10 @@ function siteTier(occ, filled, levels, R){
   return out;
 }
 
+/** @param {Uint8Array} occ @param {number} tier 0 = full mesh, 1 = outer-tier proxy
+ *  @param {number} filled @param {import('../types.js').Level[]} levels @param {number} R
+ *  @param {Uint8Array} [orbit] @param {number} [orbitOrder]
+ *  @returns {import('../types.js').MeshArrays} */
 function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
   const started = performance.now();
   const r0 = levels[0].radix;
@@ -694,6 +701,8 @@ function tierFolder(P, levels, R){
   return fold;
 }
 
+/** @param {import('../types.js').Recipe} P @param {import('../types.js').Level[]} levels
+ *  @returns {import('../types.js').BuildResult} */
 function buildBlock(P, levels){
   const started = performance.now();
   const G = GROUPS[P.sym];

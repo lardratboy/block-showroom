@@ -12,6 +12,7 @@ export class Virtualiser {
   constructor(rig, blocksG){
     this.rig = rig;
     this.blocksG = blocksG;      // scene group the specimen meshes live in
+    /** @type {Map<string, import('../types.js').BlockData>} */
     this.cache = new Map();      // key -> block data
     this.slots = new Map();      // key -> { mesh, i, j, age, ph, rate }
     this.spare = [];             // recycled meshes
@@ -37,7 +38,8 @@ export class Virtualiser {
   keyOf(i, j){
     return inDistrict(i, j) ? i + ',' + j + '@' + Pin.epoch : i + ',' + j;
   }
-  /* The cached block at an address, or null while it is still minting. */
+  /* The cached block at an address, or null while it is still minting.
+     @returns {import('../types.js').BlockData|null} */
   at(i, j){ return this.cache.get(this.keyOf(i, j)) || null; }
 
   invalidate(){ this.dirty = true; }
@@ -159,6 +161,7 @@ export class Virtualiser {
   }
 
   /* A freshly generated block enters the cache. */
+  /** @param {string} key @param {import('../types.js').BlockData} p */
   install(key, p){
     this.cache.set(key, p);
     this.cacheBytes += p.bytes;

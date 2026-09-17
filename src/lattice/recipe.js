@@ -26,6 +26,7 @@ export function specimenChiral(p){
   return GROUPS[p.sym].chiral;
 }
 
+/** @param {import('../types.js').MeshArrays} data @returns {THREE.BufferGeometry} */
 export function geometryFromArrays(data){
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(data.pos, 3));
@@ -60,7 +61,8 @@ export function hash32(a, b){
 }
 
 /* Parameters of the specimen standing at (i,j).  Pure; no state beyond
-   the axis assignment, the filters, the density and Mint.gen. */
+   the axis assignment, the filters, the density and Mint.gen.
+   @param {number} i @param {number} j @returns {import('../types.js').Recipe} */
 export function cellParams(i, j){
   let pageX = i, pageY = j;
   const got = {};
@@ -121,6 +123,7 @@ export function inDistrict(i, j){
          Math.max(Math.abs(i - Pin.i), Math.abs(j - Pin.j)) <= Pin.radius;
 }
 
+/** @param {number} i @param {number} j @returns {import('../types.js').CellRecipe} */
 export function cellRecipe(i, j){
   if (!inDistrict(i, j)) return { P: cellParams(i, j), kin: null };
 

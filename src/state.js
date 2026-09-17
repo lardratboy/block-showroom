@@ -10,11 +10,13 @@ export const Mint   = { gen:0, density:0.25 };
 /* Tier layout is global (like density), not per-cell. `levels` is
    reassigned wholesale by the presets, hence the wrapper object. */
 export const Tier = {
+  /** @type {import('./types.js').Level[]} */
   levels: [{ radix:3, gap:0.30 }, { radix:3, gap:0.06 }],
   symmetry: false
 };
 
 /* Sibling-district pin; see cellRecipe() in lattice/recipe.js. */
+/** `params` is the pinned specimen's Recipe; `want` is the address awaiting its build. */
 export const Pin = { on:false, i:0, j:0, radius:4, epoch:0, params:null, want:null };
 
 export const State = {

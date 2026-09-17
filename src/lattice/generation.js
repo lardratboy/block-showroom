@@ -22,7 +22,10 @@ export class GenerationPool {
     this.workerCount = workerCount;
     this.revision = 0; this.serial = 0;
     this.paused = false; this.suspended = false;
-    this.pool = []; this.pending = new Map(); this.results = []; this.failures = new Map();
+    this.pool = [];
+    /** @type {Map<string, import('../types.js').Job>} */
+    this.pending = new Map();
+    this.results = []; this.failures = new Map();
     this.mode = workerCount ? 'starting workers' : 'compatibility';
     this.dispatches = 0;
     this.resultLimit = Math.max(4, workerCount * 16);
@@ -148,6 +151,7 @@ export class GenerationPool {
     this.start();
   }
 
+  /** @returns {import('../types.js').Job|null} */
   _nextJob(){
     const v = this.virtualiser;
     const analyze = () => {
