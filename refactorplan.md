@@ -215,7 +215,7 @@ Order chosen so each extraction only imports things already extracted.
 - [x] `scene/floor-shader.js` — the two GLSL strings.
 - [x] `export/obj.js` — exporters. They need `cache`, `Focus`, `visible`;
       pass them as parameters for now (`exportSpecimenOBJ({ cache, focus })`).
-- [ ] `ui/permalink.js` — `readHash/writeHash/commitHash/hashString`. Same
+- [x] `ui/permalink.js` — `readHash/writeHash/commitHash/hashString`. Same
       parameter-passing approach.
 - [ ] `perf.js` — `Perf` object and the `window.*` install.
 

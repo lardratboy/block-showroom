@@ -8,6 +8,7 @@ import { symmetryLabel, specimenChiral, geometryFromArrays, blockGeometry, cellW
          hash32, cellRecipe, inDistrict } from './lattice/recipe.js';
 import { FLOOR_VERT, FLOOR_FRAG } from './scene/floor-shader.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
+import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
 
 "use strict";
 
@@ -1024,44 +1025,6 @@ function glideTo(i, j, height){
 }
 
 /* =====================================================================
-   URL ADDRESS — the lattice is deterministic, so a coordinate is a
-   shareable permalink into the catalogue.
-   ===================================================================== */
-let hashTimer = 0;
-function writeHash(){ hashTimer = 0.6; }
-function hashString(){
-  const base = `#${Math.round(Rig.x / CFG.CELL)},${Math.round(-Rig.z / CFG.CELL)},${Rig.h.toFixed(1)},${Mint.gen}`;
-  return (Pin.on && Pin.params) ? `${base},${Pin.i}.${Pin.j}.${Pin.radius}` : base;
-}
-function commitHash(){
-  const h = hashString();
-  if (location.hash === h) return;
-  // Some browsers refuse replaceState on file:// URLs; the lattice does not
-  // care, so a refusal is noted and ignored rather than thrown.
-  try { history.replaceState(null, '', h); }
-  catch (err){ console.debug('address bar not writable here', err.name); }
-}
-function readHash(){
-  const m = /^#(-?\d+),(-?\d+)(?:,([\d.]+))?(?:,(\d+))?(?:,(-?\d+)\.(-?\d+)\.(\d+))?$/.exec(location.hash || '');
-  if (!m) return false;
-  Rig.x = cellWorldX(parseInt(m[1], 10));
-  Rig.z = cellWorldZ(parseInt(m[2], 10));
-  if (m[3]) Rig.h = clamp(parseFloat(m[3]), 2.6, 96);
-  if (m[4]) Mint.gen = parseInt(m[4], 10);
-  setFocus(parseInt(m[1], 10), parseInt(m[2], 10), false);
-  if (m[5] !== undefined){
-    // The pin's anchor has to exist before it can be read, so the request
-    // is parked and the frame loop retries once minting reaches it.
-    Pin.radius = clamp(parseInt(m[7], 10), 2, 8);
-    inKin.value = String(Pin.radius);
-    Bloom.on = true;
-    btnBloom.classList.add('on');
-    Pin.want = { i: parseInt(m[5], 10), j: parseInt(m[6], 10) };
-  }
-  return true;
-}
-
-/* =====================================================================
    CONTROLS
    ===================================================================== */
 function opt(sel, value, label, selected){
@@ -1312,6 +1275,10 @@ btnAlign.addEventListener('click', () => {
   btnAlign.classList.toggle('on', State.align);
   setStatus(State.align ? 'specimens aligned for comparison' : 'idle rotation resumed');
 });
+function syncBloomUI(){
+  inKin.value = String(Pin.radius);
+  btnBloom.classList.toggle('on', Bloom.on);
+}
 btnBloom.addEventListener('click', () => {
   Bloom.on = !Bloom.on;
   btnBloom.classList.toggle('on', Bloom.on);
@@ -1388,8 +1355,8 @@ window.addEventListener('resize', () => {
 });
 
 function copyAddress(){
-  commitHash();
-  const text = location.href.split('#')[0] + hashString();
+  commitHash(Rig);
+  const text = location.href.split('#')[0] + hashString(Rig);
   if (navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text)
       .then(() => showToast('address copied — ' + Focus.i + ', ' + Focus.j))
@@ -1417,7 +1384,7 @@ let fps = 60, hudT = 0;
 syncFilterEnablement();
 setTiltSlider();
 elStatus.textContent = defaultStatus();
-if (!readHash()) setFocus(0, 0, false);
+if (!readHash({ rig: Rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
 applyRig();
 computeVisible();
 needVis = false;
@@ -1461,7 +1428,7 @@ function frame(){
   layout(State.time, dt);
   Perf.sample('main.layout', performance.now() - layoutStarted);
 
-  if (hashTimer > 0){ hashTimer -= dt; if (hashTimer <= 0) commitHash(); }
+  tickHash(dt, Rig);
 
   fps += (1 / Math.max(rawDt, 1e-4) - fps) * Math.min(1, dt * 3);
   hudT += dt;
