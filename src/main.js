@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import TWEEN from '@tweenjs/tween.js';
 import { Core } from './core/bimoblock-core.js';
-import { CFG, ROLES, ROLE_BY_ID, GROUP_COLORS, GROUP_RGB, TAU, MAX_R, PRESETS, clamp, idiv } from './config.js';
+import { CFG, ROLES, ROLE_BY_ID, GROUP_RGB, TAU, MAX_R, PRESETS, clamp } from './config.js';
 import { Axis, Filter, Mint, Tier, Pin, State, Bloom, Focus, Hover } from './state.js';
 import { symmetryLabel, specimenChiral, cellWorldX, cellWorldZ, hash32 } from './lattice/recipe.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
@@ -11,11 +11,12 @@ import { ShowroomScene } from './scene/scene.js';
 import { CameraRig } from './scene/rig.js';
 import { Virtualiser } from './scene/virtualiser.js';
 import { LabelOverlay } from './scene/labels.js';
+import { Hud } from './ui/hud.js';
 import { GenerationPool } from './lattice/generation.js';
 
 "use strict";
 
-const { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution } = Core;
+const { GROUPS, ARCH_NAMES, FIELD_NAMES, levelResolution } = Core;
 /* =====================================================================
    SHOWROOM — AN ENDLESS 2D LATTICE OF BIMOBLOCKS
    ---------------------------------------------------------------------
@@ -254,63 +255,11 @@ const labels = new LabelOverlay(document.getElementById('labels'), rig, virtuali
 /* =====================================================================
    STATE, FOCUS, HUD
    ===================================================================== */
-const elCoord   = document.getElementById('coord');
-const elStatus  = document.getElementById('status');
-const elInspect = document.getElementById('inspect');
-const elToast   = document.getElementById('toast');
-const elLegend  = document.getElementById('legend');
-
-let statusTimer = 0;
-function setStatus(text){ elStatus.textContent = text; statusTimer = 3.4; }
-function defaultStatus(){
-  const axes = 'X → ' + ROLE_BY_ID[Axis.x].label + '   ·   Y → ' + ROLE_BY_ID[Axis.y].label;
-  return (Pin.on && Pin.params)
-    ? 'district of ' + Pin.i + ', ' + Pin.j + '   ·   radius ' + Pin.radius + '   ·   ' + axes
-    : axes;
-}
-let toastTimer = 0;
-function showToast(msg){ elToast.textContent = msg; elToast.style.opacity = '1'; toastTimer = 2.4; }
-
+const hud = new Hud(virtualiser, pool, rig);
+const setStatus = text => hud.setStatus(text);
+const showToast = msg => hud.showToast(msg);
+const refreshInspector = () => hud.refreshInspector();
 function focusedData(){ return virtualiser.at(Focus.i, Focus.j); }
-
-function refreshInspector(){
-  const p = focusedData();
-  if (!p){
-    elInspect.innerHTML = `<span class="k">cell</span> <b>${Focus.i}, ${Focus.j}</b>\n<span class="k">${pool.failed('build', Focus.i, Focus.j) ? 'generation failed — shuffle to retry' : 'minting…'}</span>`;
-    return;
-  }
-
-  const g = GROUPS[p.sym];
-  const px = ROLE_BY_ID[Axis.x].count ? idiv(Focus.i, ROLE_BY_ID[Axis.x].count) : Focus.i;
-  const py = ROLE_BY_ID[Axis.y].count ? idiv(Focus.j, ROLE_BY_ID[Axis.y].count) : Focus.j;
-
-  elInspect.innerHTML =
-    `<span class="k">cell</span> <b>${Focus.i}, ${Focus.j}</b> <span class="k">· page ${px}, ${py}</span>\n` +
-    `<span class="k">${p.tierSymmetry ? 'tiers out → in' : 'group'}</span> <b>${symmetryLabel(p)}</b>\n` +
-    `<span class="k">archetype</span> <b>${ARCH_NAMES[p.arch]}</b>\n` +
-    `<span class="k">field</span> <b>${FIELD_NAMES[p.field]}</b>` +
-      (p.field >= NATIVE_FIELDS && p.field < LEGACY_FIELD_COUNT ? ` <span class="k">/</span> <b>${LIFT_NAMES[p.lift]}</b>` : '') + `\n` +
-    `<span class="k">resolution</span> <b>${p.R}</b> <span class="k">[${p.levels.map(l=>l.radix).join('×')}]</span>\n` +
-    `<span class="k">${p.tierSymmetry ? 'whole-grid order' : 'aut-order'}</span> <b>${p.aut < 0 ? (pool.failed('analyze', Focus.i, Focus.j) ? 'unavailable' : 'calculating…') : p.aut}</b> <span class="k">${p.tierSymmetry ? 'rigid transforms' : 'of '+g.order}</span>\n` +
-    `<span class="k">voxels</span> <b>${p.filled}</b> <span class="k">/ ${p.envelopeCells}</span>\n` +
-    `<span class="k">density</span> <b>${(p.density * 100).toFixed(0)}%</b>\n` +
-    `<span class="k">seed</span> <b>#${(p.seed >>> 0).toString(16).padStart(8,'0')}</b>\n` +
-    (p.kin
-      ? `<span class="k">kin</span> <b>ring ${p.kin.ring}</b> <span class="k">of ${Pin.radius} · ${p.kin.drift.length ? 'drift ' + p.kin.drift.join(' ') : 'pure inheritance'}</span>\n`
-      : '') +
-    `<span class="k">resident</span> <b>${virtualiser.cache.size}</b> <span class="k">blocks · ${(virtualiser.cacheBytes/1048576).toFixed(0)} MB · ${virtualiser.visible.length} nearby</span>\n` +
-    `<span class="k">stream tris</span> <b>${(frameTris / 1000).toFixed(0)}k</b> <span class="k">· ${fps.toFixed(0)} fps</span>\n` +
-    `<span class="k">generation</span> <b>${pool.mode === 'workers' ? pool.liveWorkers + ' workers' : pool.mode}</b> <span class="k">· ${pool.pending.size} pending${virtualiser.cacheBytes > CFG.CACHE_BYTES ? ' · visible set over cache target' : ''}</span>`;
-}
-
-function buildLegend(){
-  let html = '<div class="hd">symmetry key</div>';
-  GROUPS.forEach((g, i) => {
-    html += `<div class="row"><i style="background:${GROUP_COLORS[i]}"></i>${g.name}</div>`;
-  });
-  elLegend.innerHTML = html;
-}
-buildLegend();
 
 /* Pinning reads the anchor's traits out of the cache, so what blooms is
    the specimen actually on screen -- including one that is itself a
@@ -498,7 +447,7 @@ function setAxis(which, id){
   }
   Axis[which] = id;
   syncFilterEnablement();
-  elStatus.textContent = defaultStatus();
+  hud.resetStatus();
   flushLattice();
 }
 
@@ -723,7 +672,7 @@ btnLabels.addEventListener('click', () => {
 btnKey.addEventListener('click', () => {
   State.legend = !State.legend;
   btnKey.classList.toggle('on', State.legend);
-  elLegend.style.display = State.legend ? '' : 'none';
+  hud.setLegendVisible(State.legend);
 });
 btnShuf.addEventListener('click', () => {
   Mint.gen++;
@@ -800,11 +749,9 @@ btnObj.addEventListener('click', exportSpecimen);
    MAIN LOOP
    ===================================================================== */
 const clock = new THREE.Clock();
-let fps = 60, hudT = 0;
 
 syncFilterEnablement();
 setTiltSlider();
-elStatus.textContent = defaultStatus();
 if (!readHash({ rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
 rig.apply();
 virtualiser.computeVisible();
@@ -840,21 +787,7 @@ function frame(){
 
   tickHash(dt, rig);
 
-  fps += (1 / Math.max(rawDt, 1e-4) - fps) * Math.min(1, dt * 3);
-  hudT += dt;
-  if (hudT >= 0.4){
-    hudT = 0;
-    refreshInspector();
-    elCoord.textContent = rig.cellI + ', ' + rig.cellJ;
-  }
-  if (statusTimer > 0){
-    statusTimer -= dt;
-    if (statusTimer <= 0) elStatus.textContent = defaultStatus();
-  }
-  if (toastTimer > 0){
-    toastTimer -= dt;
-    if (toastTimer <= 0) elToast.style.opacity = '0';
-  }
+  hud.tick(rawDt, dt, frameTris);
 
   TWEEN.update();
   const renderStarted = performance.now();
