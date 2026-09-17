@@ -191,9 +191,10 @@ Exit criterion: three files, identical behaviour, one commit.
       browsers without module workers.
 - [x] Point `test/core.test.js` at the real module; delete the extraction
       hack. `node --test test/` must pass with the golden hashes.
-- [ ] Verify: worker path (default) and main-thread path (`?workers=0`) both
+- [x] Verify: worker path (default) and main-thread path (`?workers=0`) both
       produce identical specimens at the same address (compare inspector
-      `aut` and `filled`).
+      `aut` and `filled`). Checked headless after Phase 3: `#0,0,15.0,0` gives
+      seed #ce6d116d, 63/251 voxels, aut 1 on both paths.
 
 Exit criterion: core tested in Node; worker is a real file; Blob code gone.
 
