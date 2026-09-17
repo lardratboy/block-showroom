@@ -4,13 +4,14 @@ import { Core } from './core/bimoblock-core.js';
 import { runNumericJob } from './core/jobs.js';
 import { CFG, ROLES, ROLE_BY_ID, GROUP_COLORS, GROUP_RGB, TAU, MAX_R, PRESETS, clamp, idiv } from './config.js';
 import { Axis, Filter, Mint, Tier, Pin, State, Bloom, Focus, Hover } from './state.js';
-import { symmetryLabel, specimenChiral, geometryFromArrays, blockGeometry, cellWorldX, cellWorldZ,
-         hash32, cellRecipe, inDistrict } from './lattice/recipe.js';
+import { symmetryLabel, specimenChiral, geometryFromArrays, cellWorldX, cellWorldZ,
+         hash32, cellRecipe } from './lattice/recipe.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
 import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
 import { Perf, installPerformanceDiagnostics } from './perf.js';
 import { ShowroomScene } from './scene/scene.js';
 import { CameraRig } from './scene/rig.js';
+import { Virtualiser } from './scene/virtualiser.js';
 
 "use strict";
 
@@ -45,18 +46,6 @@ const { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT
       unbounded; the working set is a couple of hundred blocks.
    ===================================================================== */
 
-/* The outer-level proxy (r0^3 cells) is only meshed if something actually asks
-   to draw one, which for a lattice this shallow is a minority of cells. */
-function lodOf(p){
-  if (!p.geoLod){
-    p.geoLod = blockGeometry(p.occ, 1, p.filled, p.levels, p.R);
-    p.lodTris = p.geoLod.userData.tris;
-    const add = p.geoLod.userData.bytes;
-    p.bytes += add; cacheBytes += add;
-  }
-  return p.geoLod;
-}
-
 /* =====================================================================
    SCENE (scene/scene.js) and CAMERA RIG (scene/rig.js)
    ===================================================================== */
@@ -64,145 +53,26 @@ const stage = new ShowroomScene(document.getElementById('stage'));
 const { renderer, scene, camera, floor, floorMat, pods, focusRing, hoverRing, blocksG } = stage;
 const rig = new CameraRig(camera, renderer.domElement);
 
-const placeholder = new THREE.BufferGeometry();
-placeholder.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
-
 const _v2  = new THREE.Vector2();
 const _hit = new THREE.Vector3();
 const _p3  = new THREE.Vector3();
 
 /* =====================================================================
-   VIRTUALISATION — cache, generation queue, mesh pool
+   VIRTUALISATION — scene/virtualiser.js
    ===================================================================== */
-const cache   = new Map();   // "i,j" -> block data
-const slots   = new Map();   // "i,j" -> { mesh, i, j, age, ph, rate }
-const spare   = [];          // recycled meshes
-
-let visible = [];            // [{i,j,key}] nearest first
-let visKeys = new Set();
-let seenTick = 0;
+const virtualiser = new Virtualiser(rig, blocksG);
 let frameTris = 0;
-
-/* A district's content depends on the pin, so its cells are keyed by pin
-   epoch as well as address.  Re-pinning therefore does not invalidate
-   anything explicitly: the old district's entries simply stop being
-   referenced and fall out under LRU, and unpinning re-exposes the plain
-   keys that were already cached before the bloom. */
-function keyOf(i, j){
-  return inDistrict(i, j) ? i + ',' + j + '@' + Pin.epoch : i + ',' + j;
-}
-let cacheBytes = 0;
-
-function takeMesh(){
-  const m = spare.pop();
-  if (m){ m.visible = true; return m; }
-  const mesh = new THREE.Mesh(placeholder, new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.22, metalness: 0.08
-  }));
-  mesh.frustumCulled = true;
-  blocksG.add(mesh);
-  return mesh;
-}
-
-function releaseSlot(s){
-  s.mesh.visible = false;
-  s.mesh.geometry = placeholder;
-  spare.push(s.mesh);
-}
-
-function computeVisible(){
-  labelsDirty = true;
-  rig.apply();
-
-  let iMin = 1e9, iMax = -1e9, jMin = 1e9, jMax = -1e9;
-  const corners = [[-1,-1],[1,-1],[-1,1],[1,1],[0,0]];
-  for (const c of corners){
-    rig.groundAt(c[0], c[1], _hit);
-    const ii = _hit.x / CFG.CELL, jj = -_hit.z / CFG.CELL;
-    if (ii < iMin) iMin = ii; if (ii > iMax) iMax = ii;
-    if (jj < jMin) jMin = jj; if (jj > jMax) jMax = jj;
-  }
-
-  const ci = rig.cellI, cj = rig.cellJ;
-  const i0 = Math.max(Math.floor(iMin) - 1, ci - CFG.MAX_SPAN);
-  const i1 = Math.min(Math.ceil(iMax)  + 1, ci + CFG.MAX_SPAN);
-  const j0 = Math.max(Math.floor(jMin) - 1, cj - CFG.MAX_SPAN);
-  const j1 = Math.min(Math.ceil(jMax)  + 1, cj + CFG.MAX_SPAN);
-
-  /* At a doubled horizon the scanned box can hold fifteen thousand cells
-     and sorting all of them every time the view slides half a cell is
-     wasteful, since only the nearest few hundred can ever survive. A disc
-     of area N*CELL^2 has radius CELL*sqrt(N/pi); take that with headroom
-     as a pre-filter, and widen it only if the box turns out to be sparser
-     than the estimate (which happens at the lattice's grazing angles). */
-  const cx = camera.position.x, cz = camera.position.z;
-  const N = CFG.MAX_VISIBLE;
-  let radius = CFG.CELL * Math.sqrt(N / Math.PI) * 1.45;
-  let list = [];
-  for (let pass = 0; pass < 3; pass++){
-    const r2 = radius * radius;
-    let cut = 0;
-    list = [];
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++){
-      const dx = cellWorldX(i) - cx, dz = cellWorldZ(j) - cz;
-      const d = dx*dx + dz*dz;
-      if (d <= r2) list.push({ i, j, d }); else cut++;
-    }
-    // Widen only if the pre-filter is what is short-changing us; if it
-    // rejected nothing then the box itself is the limit and a second
-    // pass would scan the same cells for the same answer.
-    if (cut === 0 || list.length >= N) break;
-    radius *= 1.7;
-  }
-  list.sort((a, b) => a.d - b.d);
-  if (list.length > N) list.length = N;
-
-  visible = list;
-  visKeys = new Set();
-  seenTick++;
-
-  for (const c of list){
-    c.key = keyOf(c.i, c.j);
-    visKeys.add(c.key);
-    const p = cache.get(c.key);
-    if (p) p.seen = seenTick;
-  }
-
-  for (const [k, s] of slots){
-    if (!visKeys.has(k)){ releaseSlot(s); slots.delete(k); }
-  }
-  evict();
-}
-
-/* Nothing currently on screen is ever evicted; among the rest the least
-   recently seen goes first, so backtracking over ground already walked
-   is free while a long straight run steadily recycles. */
-function evict(){
-  if (cache.size <= CFG.CACHE_MAX && cacheBytes <= CFG.CACHE_BYTES) return;
-  const cold = [];
-  for (const [k, p] of cache)
-    if (!visKeys.has(k) && k !== keyOf(Focus.i, Focus.j)
-        && !(Pin.want && k === keyOf(Pin.want.i, Pin.want.j))) cold.push([k, p]);
-  cold.sort((a, b) => a[1].seen - b[1].seen);
-  for (const [k, p] of cold){
-    if (cache.size <= CFG.CACHE_MAX && cacheBytes <= CFG.CACHE_BYTES) break;
-    p.geo.dispose();
-    if (p.geoLod) p.geoLod.dispose();
-    cacheBytes -= p.bytes;
-    cache.delete(k);
-  }
-}
 
 
 // Console diagnostics (perf.js); the probe supplies this app's live fields.
 installPerformanceDiagnostics(() => ({
-  pendingUploads:[...slots.values()].filter(s => s.awaitingUpload).length,
+  pendingUploads:[...virtualiser.slots.values()].filter(s => s.awaitingUpload).length,
   workers:Generation.pool.filter(s => !s.dead).length, mode:Generation.mode,
   pending:Generation.pending.size, readyResults:Generation.results.length,
   readyBytes:Generation.results.reduce((n,r) => n + r.bytes, 0),
   reservedBytes:Generation.pool.reduce((n,s) => n + (s.job ? s.job.estimate : 0), 0),
-  residentBytes:cacheBytes, cacheOverBudget:cacheBytes > CFG.CACHE_BYTES,
-  visible:visible.length, missing:visible.filter(c => !cache.has(c.key)).length,
+  residentBytes:virtualiser.cacheBytes, cacheOverBudget:virtualiser.cacheBytes > CFG.CACHE_BYTES,
+  visible:virtualiser.visible.length, missing:virtualiser.visible.filter(c => !virtualiser.cache.has(c.key)).length,
   drawCalls:renderer.info.render.calls, triangles:renderer.info.render.triangles
 }));
 const perfOptions = new URLSearchParams(location.search);
@@ -218,11 +88,11 @@ const Generation = {
 
 function generationToken(type, key){ return Generation.revision + '/' + type + '/' + key; }
 function jobIsCurrent(job){
-  return !Generation.paused && job.revision === Generation.revision && job.key === keyOf(job.i, job.j)
-    && (job.type !== 'analyze' || cache.get(job.key) === job.specimen);
+  return !Generation.paused && job.revision === Generation.revision && job.key === virtualiser.keyOf(job.i, job.j)
+    && (job.type !== 'analyze' || virtualiser.cache.get(job.key) === job.specimen);
 }
 function isDemanded(job){
-  return visKeys.has(job.key) || (job.i === Focus.i && job.j === Focus.j)
+  return virtualiser.visKeys.has(job.key) || (job.i === Focus.i && job.j === Focus.j)
     || (Pin.want && job.i === Pin.want.i && job.j === Pin.want.j);
 }
 function invalidateGeneration(paused){
@@ -325,7 +195,7 @@ window.addEventListener('pageshow', event => {
 
 function nextGenerationJob(){
   const analyze = () => {
-    const key = keyOf(Focus.i, Focus.j), p = cache.get(key), token = generationToken('analyze', key);
+    const key = virtualiser.keyOf(Focus.i, Focus.j), p = virtualiser.cache.get(key), token = generationToken('analyze', key);
     if (!p || p.aut >= 0 || Generation.pending.has(token) || (Generation.failures.get(token)?.tries || 0) >= 2) return null;
     return { type:'analyze', i:Focus.i, j:Focus.j, key, token, specimen:p, estimate:p.occ.byteLength,
       // Structured cloning copies this small occupancy buffer; never detach the cached original.
@@ -335,8 +205,8 @@ function nextGenerationJob(){
   if (Pin.want) priority.push(Pin.want);
   priority.push(Focus);
   const makeBuild = c => {
-    const key = keyOf(c.i,c.j), token = generationToken('build', key);
-    if (cache.has(key) || Generation.pending.has(token) || (Generation.failures.get(token)?.tries || 0) >= 2) return null;
+    const key = virtualiser.keyOf(c.i,c.j), token = generationToken('build', key);
+    if (virtualiser.cache.has(key) || Generation.pending.has(token) || (Generation.failures.get(token)?.tries || 0) >= 2) return null;
     const rec = cellRecipe(c.i,c.j), levels = Tier.levels.map(l => ({...l})), R = levelResolution(levels);
     rec.P.tierSymmetry = Tier.symmetry;
     return { type:'build', i:c.i, j:c.j, key, token, rec, levels,
@@ -346,7 +216,7 @@ function nextGenerationJob(){
   };
   for (const c of priority){ const job = makeBuild(c); if (job) return job; }
   if (Generation.dispatches % 4 === 3){ const job = analyze(); if (job) return job; }
-  for (const c of visible){ const job = makeBuild(c); if (job) return job; }
+  for (const c of virtualiser.visible){ const job = makeBuild(c); if (job) return job; }
   return analyze();
 }
 function serviceGeneration(){
@@ -370,16 +240,14 @@ function serviceGeneration(){
       const p = { ...job.rec.P, occ:result.occ, R:result.R, levels:job.levels,
         filled:result.filled, envelopeCells:result.envelopeCells,
         geo:geometryFromArrays(result.geometry), geoLod:null, tris:result.geometry.tris,
-        aut:-1, seen:seenTick, kin:job.rec.kin, bytes:item.bytes, revision:job.revision };
-      cache.set(job.key,p); cacheBytes += p.bytes; Perf.installed++;
-      labelsDirty = true;
-      evict();
+        aut:-1, seen:virtualiser.seenTick, kin:job.rec.kin, bytes:item.bytes, revision:job.revision };
+      virtualiser.install(job.key, p); Perf.installed++;
     } else job.specimen.aut = result.aut;
     accepted++; admittedBytes += item.bytes;
   }
   Perf.sample('main.install', performance.now()-started);
   dispatchGeneration();
-  if (Perf.populationMs === null && visible.every(c => cache.has(c.key)))
+  if (Perf.populationMs === null && virtualiser.visible.every(c => virtualiser.cache.has(c.key)))
     Perf.populationMs = performance.now() - Perf.epochStarted;
 }
 
@@ -416,16 +284,7 @@ function dispatchGeneration(){
 
 function flushLattice(){
   invalidateGeneration(false);
-  labelsDirty = true;
-  for (const [k, s] of slots){ releaseSlot(s); }
-  slots.clear();
-  for (const p of cache.values()){
-    p.geo.dispose();
-    if (p.geoLod) p.geoLod.dispose();
-  }
-  cache.clear();
-  cacheBytes = 0;
-  needVis = true;
+  virtualiser.flush();
   refreshInspector();
 }
 
@@ -454,18 +313,18 @@ function layout(t, dt){
   const projK = window.innerHeight / (2 * Math.tan(camera.fov * Math.PI / 360));
   const hover = CFG.BLOCK_S * 0.5 + 0.42;
 
-  for (const c of visible){
-    const p = cache.get(c.key);
+  for (const c of virtualiser.visible){
+    const p = virtualiser.cache.get(c.key);
     if (!p) continue;
-    p.seen = seenTick;
+    p.seen = virtualiser.seenTick;
 
-    let s = slots.get(c.key);
+    let s = virtualiser.slots.get(c.key);
     if (!s){
       const hh = hash32(c.i, c.j);
-      s = { mesh: takeMesh(), i: c.i, j: c.j, age: 0,
+      s = { mesh: virtualiser.takeMesh(), i: c.i, j: c.j, age: 0,
             ph: (hh & 1023) / 1023 * TAU,
             rate: (((hh >>> 10) & 255) / 255 - 0.5) * 1.4 };
-      slots.set(c.key, s);
+      virtualiser.slots.set(c.key, s);
     }
     const entering = s.age < 1;
     s.age = Math.min(1, s.age + dt * 3.4);
@@ -476,7 +335,7 @@ function layout(t, dt){
 
     const useLod = !forceFullGeometry && px < CFG.LOD_PX;
     const lodStarted = useLod && !p.geoLod ? performance.now() : null;
-    const geo = useLod ? lodOf(p) : p.geo;
+    const geo = useLod ? virtualiser.lodOf(p) : p.geo;
     if (lodStarted !== null) Perf.sample('main.proxyMesh', performance.now() - lodStarted);
     const previousGeo = s.mesh.geometry;
     if (previousGeo !== geo) s.mesh.geometry = geo;
@@ -595,6 +454,7 @@ const labelCanvas = document.getElementById('labels');
 const lctx = labelCanvas.getContext('2d');
 let labelsDirty = true;
 const labelPose = { x:NaN, z:NaN, h:NaN, tilt:NaN, yaw:NaN };
+let labelRevision = -1;
 
 function sizeLabels(){
   labelsDirty = true;
@@ -615,6 +475,7 @@ function drawLabels(){
     labelsDirty = true;
     labelPose.x=rig.x; labelPose.z=rig.z; labelPose.h=rig.h; labelPose.tilt=rig.tilt; labelPose.yaw=rig.yaw;
   }
+  if (labelRevision !== virtualiser.revision){ labelsDirty = true; labelRevision = virtualiser.revision; }
   if (!labelsDirty) return;
   labelsDirty = false;
   lctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
@@ -626,9 +487,9 @@ function drawLabels(){
   lctx.font = '9px ui-monospace, Menlo, Consolas, monospace';
 
   let n = 0;
-  for (const c of visible){
+  for (const c of virtualiser.visible){
     if (n > 220) break;
-    const p = cache.get(c.key);
+    const p = virtualiser.cache.get(c.key);
     if (!p) continue;
     _p3.set(cellWorldX(c.i), 0.02, cellWorldZ(c.j) + CFG.CELL * 0.46);
     _p3.project(camera);
@@ -668,12 +529,12 @@ function defaultStatus(){
 let toastTimer = 0;
 function showToast(msg){ elToast.textContent = msg; elToast.style.opacity = '1'; toastTimer = 2.4; }
 
-function focusedData(){ return cache.get(keyOf(Focus.i, Focus.j)) || null; }
+function focusedData(){ return virtualiser.at(Focus.i, Focus.j); }
 
 function refreshInspector(){
   const p = focusedData();
   if (!p){
-    elInspect.innerHTML = `<span class="k">cell</span> <b>${Focus.i}, ${Focus.j}</b>\n<span class="k">${(Generation.failures.get(generationToken('build', keyOf(Focus.i,Focus.j)))?.tries || 0) >= 2 ? 'generation failed — shuffle to retry' : 'minting…'}</span>`;
+    elInspect.innerHTML = `<span class="k">cell</span> <b>${Focus.i}, ${Focus.j}</b>\n<span class="k">${(Generation.failures.get(generationToken('build', virtualiser.keyOf(Focus.i,Focus.j)))?.tries || 0) >= 2 ? 'generation failed — shuffle to retry' : 'minting…'}</span>`;
     return;
   }
 
@@ -688,16 +549,16 @@ function refreshInspector(){
     `<span class="k">field</span> <b>${FIELD_NAMES[p.field]}</b>` +
       (p.field >= NATIVE_FIELDS && p.field < LEGACY_FIELD_COUNT ? ` <span class="k">/</span> <b>${LIFT_NAMES[p.lift]}</b>` : '') + `\n` +
     `<span class="k">resolution</span> <b>${p.R}</b> <span class="k">[${p.levels.map(l=>l.radix).join('×')}]</span>\n` +
-    `<span class="k">${p.tierSymmetry ? 'whole-grid order' : 'aut-order'}</span> <b>${p.aut < 0 ? ((Generation.failures.get(generationToken('analyze', keyOf(Focus.i,Focus.j)))?.tries || 0) >= 2 ? 'unavailable' : 'calculating…') : p.aut}</b> <span class="k">${p.tierSymmetry ? 'rigid transforms' : 'of '+g.order}</span>\n` +
+    `<span class="k">${p.tierSymmetry ? 'whole-grid order' : 'aut-order'}</span> <b>${p.aut < 0 ? ((Generation.failures.get(generationToken('analyze', virtualiser.keyOf(Focus.i,Focus.j)))?.tries || 0) >= 2 ? 'unavailable' : 'calculating…') : p.aut}</b> <span class="k">${p.tierSymmetry ? 'rigid transforms' : 'of '+g.order}</span>\n` +
     `<span class="k">voxels</span> <b>${p.filled}</b> <span class="k">/ ${p.envelopeCells}</span>\n` +
     `<span class="k">density</span> <b>${(p.density * 100).toFixed(0)}%</b>\n` +
     `<span class="k">seed</span> <b>#${(p.seed >>> 0).toString(16).padStart(8,'0')}</b>\n` +
     (p.kin
       ? `<span class="k">kin</span> <b>ring ${p.kin.ring}</b> <span class="k">of ${Pin.radius} · ${p.kin.drift.length ? 'drift ' + p.kin.drift.join(' ') : 'pure inheritance'}</span>\n`
       : '') +
-    `<span class="k">resident</span> <b>${cache.size}</b> <span class="k">blocks · ${(cacheBytes/1048576).toFixed(0)} MB · ${visible.length} nearby</span>\n` +
+    `<span class="k">resident</span> <b>${virtualiser.cache.size}</b> <span class="k">blocks · ${(virtualiser.cacheBytes/1048576).toFixed(0)} MB · ${virtualiser.visible.length} nearby</span>\n` +
     `<span class="k">stream tris</span> <b>${(frameTris / 1000).toFixed(0)}k</b> <span class="k">· ${fps.toFixed(0)} fps</span>\n` +
-    `<span class="k">generation</span> <b>${Generation.mode === 'workers' ? Generation.pool.filter(s => !s.dead).length + ' workers' : Generation.mode}</b> <span class="k">· ${Generation.pending.size} pending${cacheBytes > CFG.CACHE_BYTES ? ' · visible set over cache target' : ''}</span>`;
+    `<span class="k">generation</span> <b>${Generation.mode === 'workers' ? Generation.pool.filter(s => !s.dead).length + ' workers' : Generation.mode}</b> <span class="k">· ${Generation.pending.size} pending${virtualiser.cacheBytes > CFG.CACHE_BYTES ? ' · visible set over cache target' : ''}</span>`;
 }
 
 function buildLegend(){
@@ -715,13 +576,13 @@ buildLegend();
    request is parked and retried, which is what makes 'warp then bloom'
    work without a stall. */
 function pinAt(i, j){
-  const p = cache.get(keyOf(i, j));
+  const p = virtualiser.at(i, j);
   if (!p){ Pin.want = { i, j }; return false; }
   Pin.params = { sym:p.sym, arch:p.arch, field:p.field,
                  lift:p.lift, density:p.density, seed:p.seed };
   Pin.i = i; Pin.j = j; Pin.on = true; Pin.epoch++;
   Pin.want = null;
-  needVis = true;
+  virtualiser.invalidate();
   refreshInspector();
   return true;
 }
@@ -729,7 +590,7 @@ function pinAt(i, j){
 function unpin(){
   if (!Pin.on) return;
   Pin.on = false; Pin.want = null; Pin.epoch++;
-  needVis = true;
+  virtualiser.invalidate();
   refreshInspector();
 }
 
@@ -748,18 +609,6 @@ function setFocus(i, j, announce){
 /* =====================================================================
    NAVIGATION INPUT
    ===================================================================== */
-let needVis = true;
-let lastVisX = 1e9, lastVisZ = 1e9, lastVisH = 0, lastVisYaw = 0, lastVisTilt = 0;
-
-/* Has the rig moved far enough since the last visibility pass to need
-   another? Polled once per frame rather than pushed from every mutation. */
-function rigMovedSinceVis(){
-  return Math.abs(rig.x - lastVisX) > CFG.CELL * 0.34 ||
-         Math.abs(rig.z - lastVisZ) > CFG.CELL * 0.34 ||
-         Math.abs(rig.h - lastVisH) > lastVisH * 0.03 ||
-         Math.abs(rig.yaw - lastVisYaw) > 0.03 ||
-         Math.abs(rig.tilt - lastVisTilt) > 0.03;
-}
 
 const pointers = new Map();
 let dragMode = null;         // 'pan' | 'orbit'
@@ -1053,7 +902,7 @@ renderLevelRows();
 
 inPitch.addEventListener('input', () => {
   CFG.CELL = parseInt(inPitch.value, 10) / 10;
-  needVis = true;
+  virtualiser.invalidate();
   setStatus('lattice pitch ' + CFG.CELL.toFixed(1));
 });
 inSize.addEventListener('input', () => {
@@ -1063,7 +912,7 @@ inSize.addEventListener('input', () => {
 inTilt.addEventListener('input', () => {
   rig.tilt = parseInt(inTilt.value, 10) * Math.PI / 180;
   rig.tilt = clamp(rig.tilt, 0.52, 1.535);
-  rig.apply(); needVis = true;
+  rig.apply(); virtualiser.invalidate();
 });
 function setTiltSlider(){ inTilt.value = String(Math.round(rig.tilt * 180 / Math.PI)); }
 inSpin.addEventListener('input', () => { State.spin = parseInt(inSpin.value, 10) / 100; });
@@ -1073,12 +922,12 @@ inKin.addEventListener('input', () => {
   Pin.radius = parseInt(inKin.value, 10);
   const n = 2 * Pin.radius + 1;
   setStatus('district radius ' + Pin.radius + '  ·  ' + (n * n) + ' relatives');
-  if (Pin.on){ Pin.epoch++; needVis = true; }
+  if (Pin.on){ Pin.epoch++; virtualiser.invalidate(); }
 });
 
 inHoriz.addEventListener('input', () => {
   CFG.MAX_VISIBLE = Math.min(CFG.POD_MAX, parseInt(inHoriz.value, 10));
-  needVis = true;
+  virtualiser.invalidate();
   setStatus('horizon holds ' + CFG.MAX_VISIBLE + ' specimens');
 });
 
@@ -1098,7 +947,7 @@ btnWarp.addEventListener('click', () => {
   const i = (Math.random() * 2000 - 1000) | 0, j = (Math.random() * 2000 - 1000) | 0;
   rig.x = cellWorldX(i); rig.z = cellWorldZ(j);
   rig.vx = rig.vz = 0;
-  needVis = true;
+  virtualiser.invalidate();
   setFocus(i, j, false);
   showToast(`warped to district ${i}, ${j}`);
 });
@@ -1148,7 +997,7 @@ inGoto.addEventListener('keydown', (e) => {
   if (!m){ setStatus('address must look like  12, -7'); return; }
   const i = parseInt(m[1], 10), j = parseInt(m[2], 10);
   const far = Math.hypot(cellWorldX(i) - rig.x, cellWorldZ(j) - rig.z) > CFG.CELL * 26;
-  if (far){ rig.x = cellWorldX(i); rig.z = cellWorldZ(j); needVis = true; }
+  if (far){ rig.x = cellWorldX(i); rig.z = cellWorldZ(j); virtualiser.invalidate(); }
   else rig.glideTo(i, j);
   setFocus(i, j, false);
   inGoto.blur();
@@ -1181,7 +1030,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('resize', () => {
   stage.resize();
   sizeLabels();
-  needVis = true;
+  virtualiser.invalidate();
 });
 
 function copyAddress(){
@@ -1201,7 +1050,7 @@ function copyAddress(){
    EXPORTERS
    ===================================================================== */
 const exportSpecimen = () => exportSpecimenOBJ({ specimen: focusedData(), toast: showToast });
-const exportSheet    = () => exportSheetOBJ({ rig, visible, cache, toast: showToast });
+const exportSheet    = () => exportSheetOBJ({ rig, visible: virtualiser.visible, cache: virtualiser.cache, toast: showToast });
 btnSheet.addEventListener('click', exportSheet);
 btnObj.addEventListener('click', exportSpecimen);
 
@@ -1216,9 +1065,7 @@ setTiltSlider();
 elStatus.textContent = defaultStatus();
 if (!readHash({ rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
 rig.apply();
-computeVisible();
-needVis = false;
-lastVisX = rig.x; lastVisZ = rig.z; lastVisH = rig.h; lastVisYaw = rig.yaw; lastVisTilt = rig.tilt;
+virtualiser.computeVisible();
 startGeneration();
 
 function frame(){
@@ -1231,13 +1078,10 @@ function frame(){
   // Inertial glide after a flick.
   if (!dragMode) rig.coast(dt);
 
-  if (needVis || rigMovedSinceVis()){
+  if (virtualiser.needsRefresh()){
     const visibilityStarted = performance.now();
-    computeVisible();
+    virtualiser.computeVisible();
     Perf.sample('main.visibility', performance.now() - visibilityStarted);
-    needVis = false;
-    lastVisX = rig.x; lastVisZ = rig.z; lastVisH = rig.h;
-    lastVisYaw = rig.yaw; lastVisTilt = rig.tilt;
   } else {
     rig.apply();
   }
