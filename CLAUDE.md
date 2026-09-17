@@ -9,6 +9,12 @@ being refactored into smaller modules per `refactorplan.md`.
 - `npm test` — Node unit tests for the pure core (`test/*.test.js`). Golden
   hashes in `test/golden.json` are the behavioural contract; they must stay
   green through every refactor step.
+- `npm run test:browser` — headless-Chrome test (`test/browser/`): loads
+  `#0,0,15.0,0` and `?workers=0#7,-3,12.0,3,7.-3.4`, waits for
+  `showroomPerformance().installed > 0`, asserts the inspector text. ~20 s,
+  Node 22+, no dependencies (DevTools protocol over built-in WebSocket).
+  Skips if Chrome isn't installed. Its expected values are the reference
+  values in `refactorplan.md`; change them only with an intended change.
 - `npm run golden` — regenerates `test/golden.json`. Only run this when a
   change to specimen output is *intended*, and say so in the commit message.
 - `npm run serve` — `python3 -m http.server 8000`; open http://localhost:8000/
@@ -29,10 +35,11 @@ No bundler, no `node_modules`. Three.js r128 and Tween.js 18.6.4 come from cdnjs
 
 ## Architecture notes
 
-- `createBimoblockCore()` is pure (no THREE, no DOM) and is shared with a
-  Web Worker. Until Phase 2 the worker is built from `Function.toString()`
-  of the core, so the core must stay a single self-contained function until
-  the worker is converted to a module worker in the same commit.
+- `createBimoblockCore()` is pure (no THREE, no DOM) and is shared with the
+  module worker `src/core/worker.js`; keep it free of DOM/THREE imports.
+- `src/types.js` holds JSDoc typedefs (`Recipe`, `Level`, `BlockData`,
+  `Job`, …) with no runtime code; reference them with
+  `@type {import('../types.js').X}` rather than duplicating shapes.
 - Console diagnostics `showroomPerformance()` / `resetShowroomPerformance()`
   and URL params `?workers=0|1|2|4`, `?fullGeometry=1` are public surface.
 - The URL hash is a permalink: `#i,j,height,gen[,pinI.pinJ.radius]`.

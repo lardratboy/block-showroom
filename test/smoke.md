@@ -13,4 +13,5 @@ Run `npm run serve`, open http://localhost:8000/, then:
 9. Reload the page → same address and specimen (permalink hash works).
 10. Append `?workers=0` to the URL → same specimens, just slower to appear.
 11. Console: `showroomPerformance()` returns an object with `installed > 0`.
+    (Steps 1, 9, 10 and 11 are also covered by `npm run test:browser`.)
 12. `O` downloads a `.obj`; `E` downloads a sheet `.obj`.
