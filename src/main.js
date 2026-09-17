@@ -10,6 +10,7 @@ import { FLOOR_VERT, FLOOR_FRAG } from './scene/floor-shader.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
 import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
 import { Perf, installPerformanceDiagnostics } from './perf.js';
+import { CameraRig } from './scene/rig.js';
 
 "use strict";
 
@@ -146,54 +147,13 @@ const focusRing = makeRing(1.02, 1.16, 0x00f5d4, 0.95);
 const hoverRing = makeRing(1.02, 1.09, 0xff3ea5, 0.5);
 
 /* =====================================================================
-   CAMERA RIG — a target on the lattice plane, a height and a pitch
+   CAMERA RIG — scene/rig.js
    ===================================================================== */
-const Rig = { x:0, z:0, h:15, tilt:0.91, yaw:0, vx:0, vz:0 };
+const rig = new CameraRig(camera, renderer.domElement);
 
-
-function applyRig(){
-  if (labelPose.x !== Rig.x || labelPose.z !== Rig.z || labelPose.h !== Rig.h
-      || labelPose.tilt !== Rig.tilt || labelPose.yaw !== Rig.yaw){
-    labelsDirty = true;
-    labelPose.x=Rig.x; labelPose.z=Rig.z; labelPose.h=Rig.h; labelPose.tilt=Rig.tilt; labelPose.yaw=Rig.yaw;
-  }
-  const horiz = Rig.h / Math.tan(Rig.tilt);
-  camera.position.set(Rig.x + Math.sin(Rig.yaw) * horiz, Rig.h, Rig.z + Math.cos(Rig.yaw) * horiz);
-  camera.up.set(0, 1, 0);
-  camera.lookAt(Rig.x, 0, Rig.z);
-  camera.updateMatrixWorld();
-}
-
-const _ray = new THREE.Raycaster();
 const _v2  = new THREE.Vector2();
 const _hit = new THREE.Vector3();
-const _a3  = new THREE.Vector3();
-const _b3  = new THREE.Vector3();
 const _p3  = new THREE.Vector3();
-
-/* Where a screen point lands on the lattice plane.  Rays aimed at or
-   above the horizon cannot land anywhere, so they are answered with a
-   capped point along the projected direction; the visible-set scan
-   clamps to MAX_SPAN anyway. */
-function groundAt(ndcx, ndcy, out){
-  _v2.set(ndcx, ndcy);
-  _ray.setFromCamera(_v2, camera);
-  const r = _ray.ray;
-  if (r.direction.y > -1e-4){
-    out.copy(r.origin).addScaledVector(r.direction, CFG.MAX_SPAN * CFG.CELL * 1.6);
-    out.y = 0;
-    return false;
-  }
-  out.copy(r.origin).addScaledVector(r.direction, -r.origin.y / r.direction.y);
-  return true;
-}
-
-function ndcOf(e, out){
-  const rect = renderer.domElement.getBoundingClientRect();
-  out.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  out.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  return out;
-}
 
 /* =====================================================================
    VIRTUALISATION — cache, generation queue, mesh pool
@@ -238,18 +198,18 @@ function releaseSlot(s){
 
 function computeVisible(){
   labelsDirty = true;
-  applyRig();
+  rig.apply();
 
   let iMin = 1e9, iMax = -1e9, jMin = 1e9, jMax = -1e9;
   const corners = [[-1,-1],[1,-1],[-1,1],[1,1],[0,0]];
   for (const c of corners){
-    groundAt(c[0], c[1], _hit);
+    rig.groundAt(c[0], c[1], _hit);
     const ii = _hit.x / CFG.CELL, jj = -_hit.z / CFG.CELL;
     if (ii < iMin) iMin = ii; if (ii > iMax) iMax = ii;
     if (jj < jMin) jMin = jj; if (jj > jMax) jMax = jj;
   }
 
-  const ci = Math.round(Rig.x / CFG.CELL), cj = Math.round(-Rig.z / CFG.CELL);
+  const ci = rig.cellI, cj = rig.cellJ;
   const i0 = Math.max(Math.floor(iMin) - 1, ci - CFG.MAX_SPAN);
   const i1 = Math.min(Math.ceil(iMax)  + 1, ci + CFG.MAX_SPAN);
   const j0 = Math.max(Math.floor(jMin) - 1, cj - CFG.MAX_SPAN);
@@ -689,10 +649,10 @@ function layout(t, dt){
   if (podColorsChanged && pods.instanceColor) pods.instanceColor.needsUpdate = true;
 
   // Floor plate rides the target; the grid stays welded to world space.
-  const reach = 34 + Rig.h * 4.2;
-  floor.position.set(Rig.x, 0, Rig.z);
+  const reach = 34 + rig.h * 4.2;
+  floor.position.set(rig.x, 0, rig.z);
   floor.scale.set(reach * 2.6, reach * 2.6, 1);
-  floorMat.uniforms.uCenter.value.set(Rig.x, Rig.z);
+  floorMat.uniforms.uCenter.value.set(rig.x, rig.z);
   floorMat.uniforms.uCell.value = CFG.CELL;
   floorMat.uniforms.uFade.value = reach;
   floorMat.uniforms.uPeriod.value.set(
@@ -703,7 +663,7 @@ function layout(t, dt){
   floorMat.uniforms.uPinC.value.set(cellWorldX(Pin.i), cellWorldZ(Pin.j));
   floorMat.uniforms.uPinR.value = (Pin.radius + 0.5) * CFG.CELL;
 
-  scene.fog.density = State.haze * 1.35 / (16 + Rig.h * 3.4);
+  scene.fog.density = State.haze * 1.35 / (16 + rig.h * 3.4);
 
   const fr = 0.62 + 0.05 * Math.sin(t * 2.4);
   focusRing.position.set(cellWorldX(Focus.i), 0.02, cellWorldZ(Focus.j));
@@ -734,12 +694,19 @@ function sizeLabels(){
 sizeLabels();
 
 function drawLabels(){
+  // The rig does not notify anyone it moved; compare its pose with the one
+  // these labels were last drawn for.
+  if (labelPose.x !== rig.x || labelPose.z !== rig.z || labelPose.h !== rig.h
+      || labelPose.tilt !== rig.tilt || labelPose.yaw !== rig.yaw){
+    labelsDirty = true;
+    labelPose.x=rig.x; labelPose.z=rig.z; labelPose.h=rig.h; labelPose.tilt=rig.tilt; labelPose.yaw=rig.yaw;
+  }
   if (!labelsDirty) return;
   labelsDirty = false;
   lctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-  if (!State.labels || Rig.h > 30) return;
+  if (!State.labels || rig.h > 30) return;
 
-  const detail = Rig.h < 13;
+  const detail = rig.h < 13;
   lctx.textAlign = 'center';
   lctx.textBaseline = 'middle';
   lctx.font = '9px ui-monospace, Menlo, Consolas, monospace';
@@ -870,13 +837,14 @@ function setFocus(i, j, announce){
 let needVis = true;
 let lastVisX = 1e9, lastVisZ = 1e9, lastVisH = 0, lastVisYaw = 0, lastVisTilt = 0;
 
-function markMoved(){
-  labelsDirty = true;
-  if (Math.abs(Rig.x - lastVisX) > CFG.CELL * 0.34 ||
-      Math.abs(Rig.z - lastVisZ) > CFG.CELL * 0.34 ||
-      Math.abs(Rig.h - lastVisH) > lastVisH * 0.03 ||
-      Math.abs(Rig.yaw - lastVisYaw) > 0.03 ||
-      Math.abs(Rig.tilt - lastVisTilt) > 0.03) needVis = true;
+/* Has the rig moved far enough since the last visibility pass to need
+   another? Polled once per frame rather than pushed from every mutation. */
+function rigMovedSinceVis(){
+  return Math.abs(rig.x - lastVisX) > CFG.CELL * 0.34 ||
+         Math.abs(rig.z - lastVisZ) > CFG.CELL * 0.34 ||
+         Math.abs(rig.h - lastVisH) > lastVisH * 0.03 ||
+         Math.abs(rig.yaw - lastVisYaw) > 0.03 ||
+         Math.abs(rig.tilt - lastVisTilt) > 0.03;
 }
 
 const pointers = new Map();
@@ -899,14 +867,14 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   }
 
   dragStart = { x:e.clientX, y:e.clientY, t:performance.now() };
-  Rig.vx = Rig.vz = 0;
+  rig.vx = rig.vz = 0;
   if (e.shiftKey || e.button === 2 || e.button === 1){
     dragMode = 'orbit';
   } else {
     dragMode = 'pan';
-    applyRig();
-    ndcOf(e, _v2);
-    groundAt(_v2.x, _v2.y, _hit);
+    rig.apply();
+    rig.ndcOf(e, _v2);
+    rig.groundAt(_v2.x, _v2.y, _hit);
     dragAnchor = _hit.clone();
   }
 });
@@ -919,34 +887,33 @@ renderer.domElement.addEventListener('pointermove', (e) => {
     const pts = [...pointers.values()];
     const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     if (pinchDist > 1 && d > 1){
-      zoomBy(pinchDist / d, 0, 0);
+      rig.zoomBy(pinchDist / d, 0, 0);
       pinchDist = d;
     }
     return;
   }
 
   if (dragMode === 'orbit' && prev){
-    const rect = renderer.domElement.getBoundingClientRect();
-    Rig.yaw  -= (e.movementX || 0) * 0.005;
-    Rig.tilt = clamp(Rig.tilt + (e.movementY || 0) * 0.004, 0.52, 1.535);
+    rig.yaw  -= (e.movementX || 0) * 0.005;
+    rig.tilt = clamp(rig.tilt + (e.movementY || 0) * 0.004, 0.52, 1.535);
     setTiltSlider();
-    applyRig(); markMoved();
+    rig.apply();
     return;
   }
 
   if (dragMode === 'pan' && dragAnchor){
-    ndcOf(e, _v2);
-    groundAt(_v2.x, _v2.y, _hit);
+    rig.ndcOf(e, _v2);
+    rig.groundAt(_v2.x, _v2.y, _hit);
     const dx = _hit.x - dragAnchor.x, dz = _hit.z - dragAnchor.z;
-    Rig.x -= dx; Rig.z -= dz;
-    Rig.vx = -dx * 14; Rig.vz = -dz * 14;
-    applyRig(); markMoved();
+    rig.x -= dx; rig.z -= dz;
+    rig.vx = -dx * 14; rig.vz = -dz * 14;
+    rig.apply();
     return;
   }
 
   // Idle hover: the cell under the cursor, straight from the plane.
-  ndcOf(e, _v2);
-  if (groundAt(_v2.x, _v2.y, _hit)){
+  rig.ndcOf(e, _v2);
+  if (rig.groundAt(_v2.x, _v2.y, _hit)){
     Hover.i = Math.round(_hit.x / CFG.CELL);
     Hover.j = Math.round(-_hit.z / CFG.CELL);
     Hover.on = true;
@@ -958,9 +925,9 @@ function endPointer(e){
   if (dragMode === 'pan' && dragStart){
     const moved = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
     if (moved < 5){
-      Rig.vx = Rig.vz = 0;
-      ndcOf(e, _v2);
-      if (groundAt(_v2.x, _v2.y, _hit))
+      rig.vx = rig.vz = 0;
+      rig.ndcOf(e, _v2);
+      if (rig.groundAt(_v2.x, _v2.y, _hit))
         setFocus(Math.round(_hit.x / CFG.CELL), Math.round(-_hit.z / CFG.CELL), true);
     }
   }
@@ -969,34 +936,11 @@ function endPointer(e){
 renderer.domElement.addEventListener('pointerup', endPointer);
 renderer.domElement.addEventListener('pointercancel', endPointer);
 
-/* Zooming keeps whatever sits under the cursor pinned in place: the rig
-   translates only, so one correction pass is exact. */
-function zoomBy(factor, ndcx, ndcy){
-  applyRig();
-  groundAt(ndcx, ndcy, _a3);
-  Rig.h = clamp(Rig.h * factor, 2.6, 96);
-  applyRig();
-  groundAt(ndcx, ndcy, _b3);
-  Rig.x += _a3.x - _b3.x;
-  Rig.z += _a3.z - _b3.z;
-  applyRig();
-  markMoved();
-}
-
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
-  ndcOf(e, _v2);
-  zoomBy(Math.exp(clamp(e.deltaY, -160, 160) * 0.0013), _v2.x, _v2.y);
+  rig.ndcOf(e, _v2);
+  rig.zoomBy(Math.exp(clamp(e.deltaY, -160, 160) * 0.0013), _v2.x, _v2.y);
 }, { passive: false });
-
-function glideTo(i, j, height){
-  const from = { x: Rig.x, z: Rig.z, h: Rig.h };
-  const to = { x: cellWorldX(i), z: cellWorldZ(j), h: height != null ? height : Rig.h };
-  Rig.vx = Rig.vz = 0;
-  new TWEEN.Tween(from).to(to, 900).easing(TWEEN.Easing.Cubic.InOut)
-    .onUpdate(() => { Rig.x = from.x; Rig.z = from.z; Rig.h = from.h; markMoved(); })
-    .start();
-}
 
 /* =====================================================================
    CONTROLS
@@ -1203,11 +1147,11 @@ inSize.addEventListener('input', () => {
   setStatus('specimen size ' + CFG.BLOCK_S.toFixed(2));
 });
 inTilt.addEventListener('input', () => {
-  Rig.tilt = parseInt(inTilt.value, 10) * Math.PI / 180;
-  Rig.tilt = clamp(Rig.tilt, 0.52, 1.535);
-  applyRig(); needVis = true;
+  rig.tilt = parseInt(inTilt.value, 10) * Math.PI / 180;
+  rig.tilt = clamp(rig.tilt, 0.52, 1.535);
+  rig.apply(); needVis = true;
 });
-function setTiltSlider(){ inTilt.value = String(Math.round(Rig.tilt * 180 / Math.PI)); }
+function setTiltSlider(){ inTilt.value = String(Math.round(rig.tilt * 180 / Math.PI)); }
 inSpin.addEventListener('input', () => { State.spin = parseInt(inSpin.value, 10) / 100; });
 inHaze.addEventListener('input', () => { State.haze = parseInt(inHaze.value, 10) / 100; });
 
@@ -1235,11 +1179,11 @@ const btnSheet  = document.getElementById('expSheet');
 const btnObj    = document.getElementById('expObj');
 const inGoto    = document.getElementById('goto');
 
-btnHome.addEventListener('click', () => { glideTo(0, 0, 15); setFocus(0, 0, false); setStatus('returned to origin'); });
+btnHome.addEventListener('click', () => { rig.glideTo(0, 0, 15); setFocus(0, 0, false); setStatus('returned to origin'); });
 btnWarp.addEventListener('click', () => {
   const i = (Math.random() * 2000 - 1000) | 0, j = (Math.random() * 2000 - 1000) | 0;
-  Rig.x = cellWorldX(i); Rig.z = cellWorldZ(j);
-  Rig.vx = Rig.vz = 0;
+  rig.x = cellWorldX(i); rig.z = cellWorldZ(j);
+  rig.vx = rig.vz = 0;
   needVis = true;
   setFocus(i, j, false);
   showToast(`warped to district ${i}, ${j}`);
@@ -1289,9 +1233,9 @@ inGoto.addEventListener('keydown', (e) => {
   const m = /^\s*(-?\d+)\s*[, ]\s*(-?\d+)\s*$/.exec(inGoto.value);
   if (!m){ setStatus('address must look like  12, -7'); return; }
   const i = parseInt(m[1], 10), j = parseInt(m[2], 10);
-  const far = Math.hypot(cellWorldX(i) - Rig.x, cellWorldZ(j) - Rig.z) > CFG.CELL * 26;
-  if (far){ Rig.x = cellWorldX(i); Rig.z = cellWorldZ(j); needVis = true; }
-  else glideTo(i, j);
+  const far = Math.hypot(cellWorldX(i) - rig.x, cellWorldZ(j) - rig.z) > CFG.CELL * 26;
+  if (far){ rig.x = cellWorldX(i); rig.z = cellWorldZ(j); needVis = true; }
+  else rig.glideTo(i, j);
   setFocus(i, j, false);
   inGoto.blur();
   showToast(`cell ${i}, ${j}`);
@@ -1301,10 +1245,10 @@ window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
   const step = e.shiftKey ? 5 : 1;
   switch (e.key){
-    case 'ArrowLeft':  glideTo(Focus.i - step, Focus.j); setFocus(Focus.i - step, Focus.j, false); e.preventDefault(); break;
-    case 'ArrowRight': glideTo(Focus.i + step, Focus.j); setFocus(Focus.i + step, Focus.j, false); e.preventDefault(); break;
-    case 'ArrowUp':    glideTo(Focus.i, Focus.j + step); setFocus(Focus.i, Focus.j + step, false); e.preventDefault(); break;
-    case 'ArrowDown':  glideTo(Focus.i, Focus.j - step); setFocus(Focus.i, Focus.j - step, false); e.preventDefault(); break;
+    case 'ArrowLeft':  rig.glideTo(Focus.i - step, Focus.j); setFocus(Focus.i - step, Focus.j, false); e.preventDefault(); break;
+    case 'ArrowRight': rig.glideTo(Focus.i + step, Focus.j); setFocus(Focus.i + step, Focus.j, false); e.preventDefault(); break;
+    case 'ArrowUp':    rig.glideTo(Focus.i, Focus.j + step); setFocus(Focus.i, Focus.j + step, false); e.preventDefault(); break;
+    case 'ArrowDown':  rig.glideTo(Focus.i, Focus.j - step); setFocus(Focus.i, Focus.j - step, false); e.preventDefault(); break;
     case '[': setFocus(Focus.i - 1, Focus.j, true); break;
     case ']': setFocus(Focus.i + 1, Focus.j, true); break;
     case 'a': case 'A': btnAlign.click(); break;
@@ -1329,8 +1273,8 @@ window.addEventListener('resize', () => {
 });
 
 function copyAddress(){
-  commitHash(Rig);
-  const text = location.href.split('#')[0] + hashString(Rig);
+  commitHash(rig);
+  const text = location.href.split('#')[0] + hashString(rig);
   if (navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text)
       .then(() => showToast('address copied — ' + Focus.i + ', ' + Focus.j))
@@ -1345,7 +1289,7 @@ function copyAddress(){
    EXPORTERS
    ===================================================================== */
 const exportSpecimen = () => exportSpecimenOBJ({ specimen: focusedData(), toast: showToast });
-const exportSheet    = () => exportSheetOBJ({ rig: Rig, visible, cache, toast: showToast });
+const exportSheet    = () => exportSheetOBJ({ rig, visible, cache, toast: showToast });
 btnSheet.addEventListener('click', exportSheet);
 btnObj.addEventListener('click', exportSpecimen);
 
@@ -1358,11 +1302,11 @@ let fps = 60, hudT = 0;
 syncFilterEnablement();
 setTiltSlider();
 elStatus.textContent = defaultStatus();
-if (!readHash({ rig: Rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
-applyRig();
+if (!readHash({ rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
+rig.apply();
 computeVisible();
 needVis = false;
-lastVisX = Rig.x; lastVisZ = Rig.z; lastVisH = Rig.h; lastVisYaw = Rig.yaw; lastVisTilt = Rig.tilt;
+lastVisX = rig.x; lastVisZ = rig.z; lastVisH = rig.h; lastVisYaw = rig.yaw; lastVisTilt = rig.tilt;
 startGeneration();
 
 function frame(){
@@ -1373,23 +1317,17 @@ function frame(){
   State.time += dt;
 
   // Inertial glide after a flick.
-  if (!dragMode && (Math.abs(Rig.vx) > 1e-4 || Math.abs(Rig.vz) > 1e-4)){
-    Rig.x += Rig.vx * dt; Rig.z += Rig.vz * dt;
-    const decay = Math.exp(-3.4 * dt);
-    Rig.vx *= decay; Rig.vz *= decay;
-    if (Math.abs(Rig.vx) < 1e-3 && Math.abs(Rig.vz) < 1e-3) Rig.vx = Rig.vz = 0;
-    applyRig(); markMoved();
-  }
+  if (!dragMode) rig.coast(dt);
 
-  if (needVis){
+  if (needVis || rigMovedSinceVis()){
     const visibilityStarted = performance.now();
     computeVisible();
     Perf.sample('main.visibility', performance.now() - visibilityStarted);
     needVis = false;
-    lastVisX = Rig.x; lastVisZ = Rig.z; lastVisH = Rig.h;
-    lastVisYaw = Rig.yaw; lastVisTilt = Rig.tilt;
+    lastVisX = rig.x; lastVisZ = rig.z; lastVisH = rig.h;
+    lastVisYaw = rig.yaw; lastVisTilt = rig.tilt;
   } else {
-    applyRig();
+    rig.apply();
   }
 
   serviceGeneration();
@@ -1402,14 +1340,14 @@ function frame(){
   layout(State.time, dt);
   Perf.sample('main.layout', performance.now() - layoutStarted);
 
-  tickHash(dt, Rig);
+  tickHash(dt, rig);
 
   fps += (1 / Math.max(rawDt, 1e-4) - fps) * Math.min(1, dt * 3);
   hudT += dt;
   if (hudT >= 0.4){
     hudT = 0;
     refreshInspector();
-    elCoord.textContent = Math.round(Rig.x / CFG.CELL) + ', ' + Math.round(-Rig.z / CFG.CELL);
+    elCoord.textContent = rig.cellI + ', ' + rig.cellJ;
   }
   if (statusTimer > 0){
     statusTimer -= dt;
