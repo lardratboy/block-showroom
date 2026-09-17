@@ -6,10 +6,10 @@ import { CFG, ROLES, ROLE_BY_ID, GROUP_COLORS, GROUP_RGB, TAU, MAX_R, PRESETS, c
 import { Axis, Filter, Mint, Tier, Pin, State, Bloom, Focus, Hover } from './state.js';
 import { symmetryLabel, specimenChiral, geometryFromArrays, blockGeometry, cellWorldX, cellWorldZ,
          hash32, cellRecipe, inDistrict } from './lattice/recipe.js';
-import { FLOOR_VERT, FLOOR_FRAG } from './scene/floor-shader.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
 import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
 import { Perf, installPerformanceDiagnostics } from './perf.js';
+import { ShowroomScene } from './scene/scene.js';
 import { CameraRig } from './scene/rig.js';
 
 "use strict";
@@ -58,98 +58,14 @@ function lodOf(p){
 }
 
 /* =====================================================================
-   SCENE
+   SCENE (scene/scene.js) and CAMERA RIG (scene/rig.js)
    ===================================================================== */
-const stage = document.getElementById('stage');
-const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x000000, 0);
-stage.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x06021a, 0.016);
-
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 900);
-
-scene.add(new THREE.AmbientLight(0xffffff, 0.62));
-const key1 = new THREE.DirectionalLight(0xfff0e8, 0.62); key1.position.set(6, 10, 8);
-const key2 = new THREE.DirectionalLight(0x8ae0ff, 0.42); key2.position.set(-7, 5, -6);
-scene.add(key1, key2);
+const stage = new ShowroomScene(document.getElementById('stage'));
+const { renderer, scene, camera, floor, floorMat, pods, focusRing, hoverRing, blocksG } = stage;
+const rig = new CameraRig(camera, renderer.domElement);
 
 const placeholder = new THREE.BufferGeometry();
 placeholder.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
-
-/* ---- infinite floor ---------------------------------------------------
-   Drawn as a plate that rides along under the camera target; the grid
-   itself is evaluated in world coordinates by scene/floor-shader.js. */
-const floorMat = new THREE.ShaderMaterial({
-  uniforms: {
-    uCenter: { value: new THREE.Vector2() },
-    uCell:   { value: CFG.CELL },
-    uPeriod: { value: new THREE.Vector2(12, 10) },
-    uFade:   { value: 60 },
-    uColA:   { value: new THREE.Color(0x2c6bff) },
-    uColB:   { value: new THREE.Color(0x00f5d4) },
-    uPinC:   { value: new THREE.Vector2() },
-    uPinR:   { value: 0 },
-    uPinOn:  { value: 0 }
-  },
-  vertexShader: FLOOR_VERT,
-  fragmentShader: FLOOR_FRAG,
-  transparent: true,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-  extensions: { derivatives: true }
-});
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), floorMat);
-floor.rotation.x = -Math.PI / 2;
-floor.frustumCulled = false;
-floor.renderOrder = -10;
-scene.add(floor);
-
-/* ---- pods -------------------------------------------------------------
-   One instanced ring per occupied cell, tinted by the specimen's
-   symmetry group.  When an axis enumerates the subgroups the floor reads
-   as coloured bands, which is a surprisingly good navigational aid. */
-const ringGeo = new THREE.RingGeometry(0.70, 0.99, 44);
-ringGeo.rotateX(-Math.PI / 2);
-{
-  const n = ringGeo.attributes.position.count;
-  const rc = new Float32Array(n * 3).fill(1);
-  ringGeo.setAttribute('color', new THREE.BufferAttribute(rc, 3));
-}
-const podMat = new THREE.MeshBasicMaterial({
-  vertexColors: true, transparent: true, opacity: 0.5,
-  blending: THREE.AdditiveBlending, depthWrite: false,
-  side: THREE.DoubleSide, fog: false
-});
-const pods = new THREE.InstancedMesh(ringGeo, podMat, CFG.POD_MAX);
-pods.frustumCulled = false;
-pods.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-pods.setColorAt(0, GROUP_RGB[0]);
-scene.add(pods);
-
-function makeRing(inner, outer, color, opacity){
-  const g = new THREE.RingGeometry(inner, outer, 64);
-  g.rotateX(-Math.PI / 2);
-  const m = new THREE.MeshBasicMaterial({
-    color, transparent: true, opacity,
-    blending: THREE.AdditiveBlending, depthWrite: false,
-    side: THREE.DoubleSide, fog: false
-  });
-  const mesh = new THREE.Mesh(g, m);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return mesh;
-}
-const focusRing = makeRing(1.02, 1.16, 0x00f5d4, 0.95);
-const hoverRing = makeRing(1.02, 1.09, 0xff3ea5, 0.5);
-
-/* =====================================================================
-   CAMERA RIG — scene/rig.js
-   ===================================================================== */
-const rig = new CameraRig(camera, renderer.domElement);
 
 const _v2  = new THREE.Vector2();
 const _hit = new THREE.Vector3();
@@ -161,8 +77,6 @@ const _p3  = new THREE.Vector3();
 const cache   = new Map();   // "i,j" -> block data
 const slots   = new Map();   // "i,j" -> { mesh, i, j, age, ph, rate }
 const spare   = [];          // recycled meshes
-const blocksG = new THREE.Group();
-scene.add(blocksG);
 
 let visible = [];            // [{i,j,key}] nearest first
 let visKeys = new Set();
@@ -1265,9 +1179,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  stage.resize();
   sizeLabels();
   needVis = true;
 });
@@ -1360,7 +1272,7 @@ function frame(){
 
   TWEEN.update();
   const renderStarted = performance.now();
-  renderer.render(scene, camera);
+  stage.render();
   Perf.sample('main.renderSubmission', performance.now() - renderStarted);
   const labelStarted = performance.now();
   drawLabels();
