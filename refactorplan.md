@@ -213,7 +213,7 @@ Order chosen so each extraction only imports things already extracted.
       plus `cellWorldX/Z`. `lodOf` stayed in `main.js`: it books `cacheBytes`,
       so it belongs to the virtualiser (Phase 4), not to a stateless module.
 - [x] `scene/floor-shader.js` — the two GLSL strings.
-- [ ] `export/obj.js` — exporters. They need `cache`, `Focus`, `visible`;
+- [x] `export/obj.js` — exporters. They need `cache`, `Focus`, `visible`;
       pass them as parameters for now (`exportSpecimenOBJ({ cache, focus })`).
 - [ ] `ui/permalink.js` — `readHash/writeHash/commitHash/hashString`. Same
       parameter-passing approach.
