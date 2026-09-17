@@ -1,17 +1,16 @@
 import * as THREE from 'three';
 import TWEEN from '@tweenjs/tween.js';
 import { Core } from './core/bimoblock-core.js';
-import { runNumericJob } from './core/jobs.js';
 import { CFG, ROLES, ROLE_BY_ID, GROUP_COLORS, GROUP_RGB, TAU, MAX_R, PRESETS, clamp, idiv } from './config.js';
 import { Axis, Filter, Mint, Tier, Pin, State, Bloom, Focus, Hover } from './state.js';
-import { symmetryLabel, specimenChiral, geometryFromArrays, cellWorldX, cellWorldZ,
-         hash32, cellRecipe } from './lattice/recipe.js';
+import { symmetryLabel, specimenChiral, cellWorldX, cellWorldZ, hash32 } from './lattice/recipe.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
 import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
 import { Perf, installPerformanceDiagnostics } from './perf.js';
 import { ShowroomScene } from './scene/scene.js';
 import { CameraRig } from './scene/rig.js';
 import { Virtualiser } from './scene/virtualiser.js';
+import { GenerationPool } from './lattice/generation.js';
 
 "use strict";
 
@@ -67,10 +66,10 @@ let frameTris = 0;
 // Console diagnostics (perf.js); the probe supplies this app's live fields.
 installPerformanceDiagnostics(() => ({
   pendingUploads:[...virtualiser.slots.values()].filter(s => s.awaitingUpload).length,
-  workers:Generation.pool.filter(s => !s.dead).length, mode:Generation.mode,
-  pending:Generation.pending.size, readyResults:Generation.results.length,
-  readyBytes:Generation.results.reduce((n,r) => n + r.bytes, 0),
-  reservedBytes:Generation.pool.reduce((n,s) => n + (s.job ? s.job.estimate : 0), 0),
+  workers:pool.liveWorkers, mode:pool.mode,
+  pending:pool.pending.size, readyResults:pool.results.length,
+  readyBytes:pool.results.reduce((n,r) => n + r.bytes, 0),
+  reservedBytes:pool.pool.reduce((n,s) => n + (s.job ? s.job.estimate : 0), 0),
   residentBytes:virtualiser.cacheBytes, cacheOverBudget:virtualiser.cacheBytes > CFG.CACHE_BYTES,
   visible:virtualiser.visible.length, missing:virtualiser.visible.filter(c => !virtualiser.cache.has(c.key)).length,
   drawCalls:renderer.info.render.calls, triangles:renderer.info.render.triangles
@@ -80,210 +79,10 @@ const forceFullGeometry = perfOptions.get('fullGeometry') === '1';
 const requestedWorkers = perfOptions.has('workers') ? Number(perfOptions.get('workers')) : null;
 const workerCount = [0,1,2,4].includes(requestedWorkers) ? requestedWorkers
   : (navigator.hardwareConcurrency >= 4 ? 2 : 1);
-const Generation = {
-  revision:0, serial:0, paused:false, suspended:false, pool:[], pending:new Map(), results:[], failures:new Map(),
-  mode:workerCount ? 'starting workers' : 'compatibility', dispatches:0,
-  resultLimit:Math.max(4, workerCount * 16)
-};
-
-function generationToken(type, key){ return Generation.revision + '/' + type + '/' + key; }
-function jobIsCurrent(job){
-  return !Generation.paused && job.revision === Generation.revision && job.key === virtualiser.keyOf(job.i, job.j)
-    && (job.type !== 'analyze' || virtualiser.cache.get(job.key) === job.specimen);
-}
-function isDemanded(job){
-  return virtualiser.visKeys.has(job.key) || (job.i === Focus.i && job.j === Focus.j)
-    || (Pin.want && job.i === Pin.want.i && job.j === Pin.want.j);
-}
-function invalidateGeneration(paused){
-  Generation.revision++;
-  Generation.paused = paused;
-  Generation.pending.clear(); Generation.results.length = 0; Generation.failures.clear();
-  Perf.populationMs = null; Perf.epochStarted = performance.now();
-  // Active workers finish their one job. Revision checks discard the obsolete result.
-}
-function generationFailure(job, error){
-  if (!job) return;
-  Generation.pending.delete(job.token);
-  if (!jobIsCurrent(job)) return;
-  const tries = (Generation.failures.get(job.token)?.tries || 0) + 1;
-  Generation.failures.set(job.token, { tries, message:String(error) });
-  if (tries >= 2) console.warn('Specimen generation failed', job.key, error);
-}
-function finishGeneration(slot, message){
-  const job = slot.job;
-  if (!job || message.jobId !== job.jobId) return;
-  clearTimeout(slot.timer); slot.timer = null; slot.job = null;
-  if (message.error){
-    generationFailure(job, message.error);
-    if (slot.worker) restartGenerationWorker(slot);
-    return;
-  }
-  if (!jobIsCurrent(job) || !isDemanded(job)){
-    Generation.pending.delete(job.token); Perf.discarded++; return;
-  }
-  const result = message.result;
-  const bytes = job.type === 'build' ? result.geometry.bytes + result.occ.byteLength : 0;
-  Generation.results.push({ job, result, bytes });
-  const source = slot.worker ? 'worker.' : 'compatibility.';
-  if (result.timings) for (const [name,ms] of Object.entries(result.timings)) Perf.sample(source+name, ms);
-  if (result.analysisMs != null) Perf.sample(source+'analysis', result.analysisMs);
-}
-function restartGenerationWorker(slot){
-  clearTimeout(slot.timer);
-  if (slot.worker){ slot.worker.onmessage = slot.worker.onerror = slot.worker.onmessageerror = null; slot.worker.terminate(); }
-  slot.worker = null; slot.ready = false;
-  if (slot.restarts++ < 1) startGenerationWorker(slot);
-  else slot.dead = true;
-  if (Generation.pool.every(s => s.dead)){
-    Generation.mode = 'compatibility';
-    console.warn('Workers unavailable; using conservative main-thread generation.');
-  }
-}
-function startGenerationWorker(slot){
-  const fail = error => {
-    const job = slot.job; slot.job = null;
-    generationFailure(job, error);
-    restartGenerationWorker(slot);
-  };
-  try {
-    // Module worker; browsers without module-worker support throw here and
-    // fall through to the main-thread 'compatibility' path.
-    const worker = slot.worker = new Worker(new URL('./core/worker.js', import.meta.url), {type:'module'});
-    slot.timer = setTimeout(() => fail('Worker startup timed out'), 10000);
-    worker.onerror = event => { event.preventDefault(); fail(event.message || 'Worker error'); };
-    worker.onmessageerror = () => fail('Invalid worker message');
-    worker.onmessage = ({data}) => {
-      if (data.ready){
-        clearTimeout(slot.timer); slot.timer = null; slot.ready = true;
-        Generation.mode = 'workers';
-      } else finishGeneration(slot, data);
-      dispatchGeneration();
-    };
-    slot.fail = fail;
-  } catch (error){ fail(error.message); }
-}
-function startGeneration(){
-  if (!workerCount) return;
-  // Allocate slots first: startup failures must see the complete pool.
-  Generation.pool = Array.from({length:workerCount}, () => ({worker:null, job:null, ready:false, dead:false, restarts:0}));
-  try {
-    for (const slot of Generation.pool) startGenerationWorker(slot);
-  } catch (error){
-    for (const slot of Generation.pool) slot.dead = true;
-    Generation.mode = 'compatibility'; console.warn('Worker setup failed', error);
-  }
-}
-window.addEventListener('pagehide', () => {
-  Generation.suspended = true;
-  for (const slot of Generation.pool){
-    clearTimeout(slot.timer);
-    if (slot.worker){
-      slot.worker.onmessage = slot.worker.onerror = slot.worker.onmessageerror = null;
-      slot.worker.terminate();
-    }
-  }
-  Generation.pool = []; Generation.pending.clear(); Generation.results.length = 0;
-});
-window.addEventListener('pageshow', event => {
-  if (!event.persisted) return;
-  // Resume a back/forward-cached page without losing its unsaved catalogue settings.
-  Generation.suspended = false;
-  Generation.mode = workerCount ? 'starting workers' : 'compatibility';
-  startGeneration();
-});
-
-function nextGenerationJob(){
-  const analyze = () => {
-    const key = virtualiser.keyOf(Focus.i, Focus.j), p = virtualiser.cache.get(key), token = generationToken('analyze', key);
-    if (!p || p.aut >= 0 || Generation.pending.has(token) || (Generation.failures.get(token)?.tries || 0) >= 2) return null;
-    return { type:'analyze', i:Focus.i, j:Focus.j, key, token, specimen:p, estimate:p.occ.byteLength,
-      // Structured cloning copies this small occupancy buffer; never detach the cached original.
-      payload:{ occ:p.occ, R:p.R } };
-  };
-  const priority = [];
-  if (Pin.want) priority.push(Pin.want);
-  priority.push(Focus);
-  const makeBuild = c => {
-    const key = virtualiser.keyOf(c.i,c.j), token = generationToken('build', key);
-    if (virtualiser.cache.has(key) || Generation.pending.has(token) || (Generation.failures.get(token)?.tries || 0) >= 2) return null;
-    const rec = cellRecipe(c.i,c.j), levels = Tier.levels.map(l => ({...l})), R = levelResolution(levels);
-    rec.P.tierSymmetry = Tier.symmetry;
-    return { type:'build', i:c.i, j:c.j, key, token, rec, levels,
-      // Six independent quads per cell, 32-bit indices, occupancy, plus the
-      // colOrbit buffer alongside the existing gamut one: conservative reservation.
-      estimate:R*R*R*(6*216+1), payload:{recipe:rec.P, levels} };
-  };
-  for (const c of priority){ const job = makeBuild(c); if (job) return job; }
-  if (Generation.dispatches % 4 === 3){ const job = analyze(); if (job) return job; }
-  for (const c of virtualiser.visible){ const job = makeBuild(c); if (job) return job; }
-  return analyze();
-}
-function serviceGeneration(){
-  if (Generation.paused) return;
-  const started = performance.now();
-  // Re-check demand even after a result was queued, since the camera/settings can change meanwhile.
-  Generation.results = Generation.results.filter(item => {
-    if (jobIsCurrent(item.job) && isDemanded(item.job)) return true;
-    Generation.pending.delete(item.job.token); Perf.discarded++; return false;
-  });
-  const rank = item => item.job.i === Focus.i && item.job.j === Focus.j ? -2
-    : Pin.want && item.job.i === Pin.want.i && item.job.j === Pin.want.j ? -1
-    : (cellWorldX(item.job.i)-camera.position.x)**2 + (cellWorldZ(item.job.j)-camera.position.z)**2;
-  Generation.results.sort((a,b) => rank(a)-rank(b));
-  let accepted = 0, admittedBytes = 0;
-  while (Generation.results.length && accepted < 32){
-    const item = Generation.results[0], {job,result} = item;
-    if (accepted && (performance.now()-started >= CFG.INSTALL_MS || admittedBytes+item.bytes > CFG.UPLOAD_BYTES)) break;
-    Generation.results.shift(); Generation.pending.delete(job.token); Generation.failures.delete(job.token);
-    if (job.type === 'build'){
-      const p = { ...job.rec.P, occ:result.occ, R:result.R, levels:job.levels,
-        filled:result.filled, envelopeCells:result.envelopeCells,
-        geo:geometryFromArrays(result.geometry), geoLod:null, tris:result.geometry.tris,
-        aut:-1, seen:virtualiser.seenTick, kin:job.rec.kin, bytes:item.bytes, revision:job.revision };
-      virtualiser.install(job.key, p); Perf.installed++;
-    } else job.specimen.aut = result.aut;
-    accepted++; admittedBytes += item.bytes;
-  }
-  Perf.sample('main.install', performance.now()-started);
-  dispatchGeneration();
-  if (Perf.populationMs === null && virtualiser.visible.every(c => virtualiser.cache.has(c.key)))
-    Perf.populationMs = performance.now() - Perf.epochStarted;
-}
-
-
-// Refill idle workers on completion, not just at RAF cadence. The bounded ready
-// queue absorbs bursts; install time and upload bytes determine admission per frame.
-function dispatchGeneration(){
-  if (Generation.paused || Generation.suspended || document.hidden) return;
-  const available = Generation.mode === 'compatibility' ? [{job:null,worker:null}]
-    : Generation.pool.filter(s => s.ready && !s.dead && !s.job);
-  for (const slot of available){
-    const active = Generation.pool.filter(s => s.job);
-    if (Generation.results.length + active.length >= Generation.resultLimit) break;
-    const reserved = active.reduce((n,s) => n+s.job.estimate, 0)
-      + Generation.results.reduce((n,r) => n+r.bytes, 0);
-    const job = nextGenerationJob();
-    if (!job) break;
-    if (reserved && reserved+job.estimate > CFG.RESULT_BYTES) break;
-    job.revision = Generation.revision; job.jobId = ++Generation.serial;
-    const message = {type:job.type, jobId:job.jobId, ...job.payload};
-    Generation.pending.set(job.token,job); Generation.dispatches++; slot.job = job;
-    if (slot.worker){
-      slot.timer = setTimeout(() => slot.fail('Worker job timed out'), 30000);
-      try { slot.worker.postMessage(message); } catch (error){ slot.fail(error.message); }
-    } else {
-      // At most one complete job per compatibility frame. A single build cannot be preempted.
-      const t0 = performance.now();
-      try { finishGeneration(slot, {jobId:job.jobId, result:runNumericJob(Core,message)}); }
-      catch (error){ finishGeneration(slot, {jobId:job.jobId,error:error.message}); }
-      Perf.sample('main.compatibility', performance.now()-t0);
-    }
-  }
-}
+const pool = new GenerationPool(virtualiser, rig, { workerCount });
 
 function flushLattice(){
-  invalidateGeneration(false);
+  pool.invalidate(false);
   virtualiser.flush();
   refreshInspector();
 }
@@ -534,7 +333,7 @@ function focusedData(){ return virtualiser.at(Focus.i, Focus.j); }
 function refreshInspector(){
   const p = focusedData();
   if (!p){
-    elInspect.innerHTML = `<span class="k">cell</span> <b>${Focus.i}, ${Focus.j}</b>\n<span class="k">${(Generation.failures.get(generationToken('build', virtualiser.keyOf(Focus.i,Focus.j)))?.tries || 0) >= 2 ? 'generation failed — shuffle to retry' : 'minting…'}</span>`;
+    elInspect.innerHTML = `<span class="k">cell</span> <b>${Focus.i}, ${Focus.j}</b>\n<span class="k">${pool.failed('build', Focus.i, Focus.j) ? 'generation failed — shuffle to retry' : 'minting…'}</span>`;
     return;
   }
 
@@ -549,7 +348,7 @@ function refreshInspector(){
     `<span class="k">field</span> <b>${FIELD_NAMES[p.field]}</b>` +
       (p.field >= NATIVE_FIELDS && p.field < LEGACY_FIELD_COUNT ? ` <span class="k">/</span> <b>${LIFT_NAMES[p.lift]}</b>` : '') + `\n` +
     `<span class="k">resolution</span> <b>${p.R}</b> <span class="k">[${p.levels.map(l=>l.radix).join('×')}]</span>\n` +
-    `<span class="k">${p.tierSymmetry ? 'whole-grid order' : 'aut-order'}</span> <b>${p.aut < 0 ? ((Generation.failures.get(generationToken('analyze', virtualiser.keyOf(Focus.i,Focus.j)))?.tries || 0) >= 2 ? 'unavailable' : 'calculating…') : p.aut}</b> <span class="k">${p.tierSymmetry ? 'rigid transforms' : 'of '+g.order}</span>\n` +
+    `<span class="k">${p.tierSymmetry ? 'whole-grid order' : 'aut-order'}</span> <b>${p.aut < 0 ? (pool.failed('analyze', Focus.i, Focus.j) ? 'unavailable' : 'calculating…') : p.aut}</b> <span class="k">${p.tierSymmetry ? 'rigid transforms' : 'of '+g.order}</span>\n` +
     `<span class="k">voxels</span> <b>${p.filled}</b> <span class="k">/ ${p.envelopeCells}</span>\n` +
     `<span class="k">density</span> <b>${(p.density * 100).toFixed(0)}%</b>\n` +
     `<span class="k">seed</span> <b>#${(p.seed >>> 0).toString(16).padStart(8,'0')}</b>\n` +
@@ -558,7 +357,7 @@ function refreshInspector(){
       : '') +
     `<span class="k">resident</span> <b>${virtualiser.cache.size}</b> <span class="k">blocks · ${(virtualiser.cacheBytes/1048576).toFixed(0)} MB · ${virtualiser.visible.length} nearby</span>\n` +
     `<span class="k">stream tris</span> <b>${(frameTris / 1000).toFixed(0)}k</b> <span class="k">· ${fps.toFixed(0)} fps</span>\n` +
-    `<span class="k">generation</span> <b>${Generation.mode === 'workers' ? Generation.pool.filter(s => !s.dead).length + ' workers' : Generation.mode}</b> <span class="k">· ${Generation.pending.size} pending${virtualiser.cacheBytes > CFG.CACHE_BYTES ? ' · visible set over cache target' : ''}</span>`;
+    `<span class="k">generation</span> <b>${pool.mode === 'workers' ? pool.liveWorkers + ' workers' : pool.mode}</b> <span class="k">· ${pool.pending.size} pending${virtualiser.cacheBytes > CFG.CACHE_BYTES ? ' · visible set over cache target' : ''}</span>`;
 }
 
 function buildLegend(){
@@ -787,7 +586,7 @@ function debounce(fn, ms){
   return (...a) => { if (h) clearTimeout(h); h = setTimeout(() => { h = 0; fn(...a); }, ms); };
 }
 const commitConfiguration = debounce(() => flushLattice(), 200);
-function applyConfiguration(){ invalidateGeneration(true); commitConfiguration(); }
+function applyConfiguration(){ pool.invalidate(true); commitConfiguration(); }
 const applyDensity = applyConfiguration;
 inDens.addEventListener('input', () => {
   Mint.density = parseInt(inDens.value, 10) / 100;
@@ -1066,7 +865,7 @@ elStatus.textContent = defaultStatus();
 if (!readHash({ rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
 rig.apply();
 virtualiser.computeVisible();
-startGeneration();
+pool.start();
 
 function frame(){
   requestAnimationFrame(frame);
@@ -1086,7 +885,7 @@ function frame(){
     rig.apply();
   }
 
-  serviceGeneration();
+  pool.service();
 
   // A parked pin (from a permalink, or a bloom requested before its
   // anchor had been minted) retries until the anchor exists.
