@@ -201,7 +201,7 @@ Exit criterion: core tested in Node; worker is a real file; Blob code gone.
 
 Order chosen so each extraction only imports things already extracted.
 
-- [ ] `config.js` — `CFG`, `ROLES`, `ROLE_BY_ID`, `GROUP_COLORS`, `GROUP_RGB`,
+- [x] `config.js` — `CFG`, `ROLES`, `ROLE_BY_ID`, `GROUP_COLORS`, `GROUP_RGB`,
       `TAU`, `MAX_R`, the preset table from the levels editor, `clamp/imod/idiv`.
 - [ ] `state.js` — export the plain objects `Axis`, `Filter`, `Mint`, `Pin`,
       `Focus`, `Hover`, `Bloom`, `State`, and `let`-bindings `Levels`,

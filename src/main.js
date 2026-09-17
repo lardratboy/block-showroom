@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import TWEEN from '@tweenjs/tween.js';
 import { Core } from './core/bimoblock-core.js';
 import { runNumericJob } from './core/jobs.js';
+import { CFG, ROLES, ROLE_BY_ID, GROUP_COLORS, GROUP_RGB, TAU, MAX_R, PRESETS, clamp, imod, idiv } from './config.js';
 
 "use strict";
 
@@ -78,43 +79,9 @@ function blockGeometry(occ, tier, filled, levels, R){
       unbounded; the working set is a couple of hundred blocks.
    ===================================================================== */
 
-const TAU = Math.PI * 2;
-
-const CFG = {
-  CELL:        2.6,     // lattice pitch, world units
-  BLOCK_S:     1.18,    // specimen scale (geometry is a unit cube)
-  MAX_VISIBLE: 336,     // horizon depth: specimens drawn at once, live
-  POD_MAX:     480,     // pod instance allocation, and the ceiling on the above
-  CACHE_MAX:   760,     // retained generated blocks (each owns geometry)
-  MAX_SPAN:    62,      // clamp on the cell box scanned per rebuild
-  LOD_PX:      30,      // projected CSS-pixel size below which the 3^3 proxy is used
-  INSTALL_MS:  1.0,     // soft CPU budget for accepting worker results
-  UPLOAD_BYTES: 8 * 1048576, // newly admitted geometry per frame (one oversize allowed)
-  RESULT_BYTES: 96 * 1048576,
-  CACHE_BYTES: 256 * 1048576
-};
-
-/* ---- axis roles -------------------------------------------------------
-   A role is an enumeration plus its period.  'free' means the axis does
-   not enumerate anything, so its coordinate feeds the seed directly. */
-const ROLES = [
-  { id:'free',  label:'free roam',  count:0 },
-  { id:'arch',  label:'archetype',  count:ARCH_NAMES.length  },
-  { id:'sym',   label:'symmetry',   count:GROUPS.length      },
-  { id:'field', label:'field',      count:FIELD_NAMES.length },
-  { id:'lift',  label:'lift',       count:LIFT_NAMES.length  },
-  { id:'dens',  label:'density',    count:9                  }
-];
-const ROLE_BY_ID = {};
-for (const r of ROLES) ROLE_BY_ID[r.id] = r;
-
 const Axis   = { x:'arch', y:'sym' };
 const Filter = { sym:-1, arch:-1, field:-1 };
 const Mint   = { gen:0, density:0.25 };
-
-const GROUP_COLORS = ['#ff3ea5','#ff8a3d','#ffd23d','#9bff3d','#3dff8a',
-                      '#00f5d4','#3dc9ff','#6f7dff','#b46cff','#ff5edb'];
-const GROUP_RGB = GROUP_COLORS.map(h => new THREE.Color(h));
 
 function hash32(a, b){
   let h = ((a | 0) ^ Math.imul((b | 0) + 1, 0x9e3779b1)) >>> 0;
@@ -122,9 +89,6 @@ function hash32(a, b){
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
   return (h ^ (h >>> 16)) >>> 0;
 }
-const imod = (a, n) => ((a % n) + n) % n;
-const idiv = (a, n) => Math.floor(a / n);
-const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
 /* Parameters of the specimen standing at (i,j).  Pure; no state beyond
    the axis assignment, the filters, the density and Mint.gen. */
@@ -1413,12 +1377,9 @@ inDens.addEventListener('input', () => {
 /* =====================================================================
    LEVELS EDITOR — arbitrary {radix,gap} tier list, global (like density),
    not per-cell. Editing it invalidates every cached specimen since it
-   changes their resolution. MAX_R guards against a runaway per-specimen
-   cell count: unlike the standalone prototype (one specimen at a time),
-   the lattice keeps up to CFG.POD_MAX specimens live at once, so the
-   safe ceiling here is much lower.
+   changes their resolution. MAX_R (config.js) caps the per-specimen
+   cell count.
    ===================================================================== */
-const MAX_R = 32;  // covers every shipped preset (tower3=27, tower4=16, hetero=24) with headroom
 const applyLevels = applyConfiguration;
 const lvRows = document.getElementById('lvrows'), resLine = document.getElementById('resLine');
 
@@ -1505,13 +1466,7 @@ document.getElementById('btnDelLevel').addEventListener('click', () => {
 });
 document.querySelectorAll('#levelsPanel .presets button').forEach(b => b.addEventListener('click', () => {
   const p = b.dataset.preset;
-  let next = Levels;
-  if (p === 'classic') next = [{radix:3,gap:0.30},{radix:3,gap:0.06}];
-  if (p === 'tower3')  next = [{radix:3,gap:0.35},{radix:3,gap:0.12},{radix:3,gap:0.04}];
-  if (p === 'tower4')  next = [{radix:2,gap:0.35},{radix:2,gap:0.20},{radix:2,gap:0.10},{radix:2,gap:0.04}];
-  if (p === 'hetero')  next = [{radix:4,gap:0.30},{radix:3,gap:0.14},{radix:2,gap:0.05}];
-  if (p === 'n4')      next = [{radix:4,gap:0.30},{radix:4,gap:0.08}];
-  if (p === 'n5')      next = [{radix:5,gap:0.20}];
+  const next = PRESETS[p] || Levels;
   if (levelResolution(next) > MAX_R){
     console.warn(`[bimoblock] preset '${p}' rejected: R=${levelResolution(next)} exceeds MAX_R=${MAX_R}`);
     setStatus(`preset too large — R capped at ${MAX_R}`);
