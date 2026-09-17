@@ -1,11 +1,10 @@
 import * as THREE from 'three';
 import TWEEN from '@tweenjs/tween.js';
 import { Core } from './core/bimoblock-core.js';
-import { CFG, ROLES, ROLE_BY_ID, GROUP_RGB, TAU, MAX_R, PRESETS, clamp } from './config.js';
-import { Axis, Filter, Mint, Tier, Pin, State, Bloom, Focus, Hover } from './state.js';
+import { CFG, ROLE_BY_ID, GROUP_RGB, TAU } from './config.js';
+import { Axis, Pin, State, Bloom, Focus, Hover } from './state.js';
 import { symmetryLabel, specimenChiral, cellWorldX, cellWorldZ, hash32 } from './lattice/recipe.js';
-import { exportSpecimenOBJ, exportSheetOBJ } from './export/obj.js';
-import { readHash, writeHash, commitHash, hashString, tickHash } from './ui/permalink.js';
+import { readHash, writeHash, tickHash } from './ui/permalink.js';
 import { Perf, installPerformanceDiagnostics } from './perf.js';
 import { ShowroomScene } from './scene/scene.js';
 import { CameraRig } from './scene/rig.js';
@@ -13,11 +12,13 @@ import { Virtualiser } from './scene/virtualiser.js';
 import { LabelOverlay } from './scene/labels.js';
 import { Hud } from './ui/hud.js';
 import { Navigation } from './ui/input.js';
+import { Controls } from './ui/controls.js';
+import { LevelsEditor } from './ui/levels-editor.js';
 import { GenerationPool } from './lattice/generation.js';
 
 "use strict";
 
-const { GROUPS, ARCH_NAMES, FIELD_NAMES, levelResolution } = Core;
+const { ARCH_NAMES } = Core;
 /* =====================================================================
    SHOWROOM — AN ENDLESS 2D LATTICE OF BIMOBLOCKS
    ---------------------------------------------------------------------
@@ -305,326 +306,24 @@ const nav = new Navigation(rig, {
 });
 
 /* =====================================================================
-   CONTROLS
+   SETTINGS THAT REBUILD THE LATTICE
    ===================================================================== */
-function opt(sel, value, label, selected){
-  const o = document.createElement('option');
-  o.value = value; o.textContent = label;
-  if (selected) o.selected = true;
-  sel.appendChild(o);
-}
-
-const selAxX  = document.getElementById('axX');
-const selAxY  = document.getElementById('axY');
-const selSym  = document.getElementById('sym');
-const selArch = document.getElementById('arch');
-const selFld  = document.getElementById('field');
-const selColor = document.getElementById('colorMode');
-
-ROLES.forEach(r => opt(selAxX, r.id, 'x axis: ' + r.label, r.id === Axis.x));
-ROLES.forEach(r => opt(selAxY, r.id, 'y axis: ' + r.label, r.id === Axis.y));
-
-opt(selSym, '-1', 'symmetry: roam', true);
-GROUPS.forEach((g, i) => opt(selSym, String(i), 'symmetry: ' + g.name));
-opt(selArch, '-1', 'archetype: roam', true);
-ARCH_NAMES.forEach((n, i) => opt(selArch, String(i), 'archetype: ' + n));
-opt(selFld, '-1', 'field: roam', true);
-FIELD_NAMES.forEach((n, i) => opt(selFld, String(i), 'field: ' + n));
-
-// Additive display modes only — never touch generation, so switching never
-// invalidates the cache or needs flushLattice(). Specimens built before this
-// mode existed (or LOD proxies, which never carry orbit data) just have no
-// colorOrbit attribute and layout() below falls back to gamut for them.
-opt(selColor, 'gamut', 'color: gamut position', true);
-opt(selColor, 'chiral', 'color: chirality');
-opt(selColor, 'orbit', 'color: orbit index');
-
-function syncFilterEnablement(){
-  selSym.disabled  = (Axis.x === 'sym'   || Axis.y === 'sym');
-  selArch.disabled = (Axis.x === 'arch'  || Axis.y === 'arch');
-  selFld.disabled  = (Axis.x === 'field' || Axis.y === 'field');
-  inDens.disabled  = (Axis.x === 'dens'  || Axis.y === 'dens');
-}
-
-function setAxis(which, id){
-  const other = which === 'x' ? 'y' : 'x';
-  // Two axes may not enumerate the same thing; the loser falls back to roam.
-  if (id !== 'free' && Axis[other] === id){
-    Axis[other] = 'free';
-    (other === 'x' ? selAxX : selAxY).value = 'free';
-  }
-  Axis[which] = id;
-  syncFilterEnablement();
-  hud.resetStatus();
-  flushLattice();
-}
-
-selAxX.addEventListener('change', () => setAxis('x', selAxX.value));
-selAxY.addEventListener('change', () => setAxis('y', selAxY.value));
-selSym.addEventListener('change',  () => { Filter.sym   = parseInt(selSym.value, 10);  flushLattice(); });
-selArch.addEventListener('change', () => { Filter.arch  = parseInt(selArch.value, 10); flushLattice(); });
-selFld.addEventListener('change',  () => { Filter.field = parseInt(selFld.value, 10);  flushLattice(); });
-selColor.addEventListener('change', () => {
-  State.colorMode = selColor.value;
-  const label = State.colorMode === 'chiral' ? 'chirality (amber = chiral, blue = achiral)'
-    : State.colorMode === 'orbit' ? 'orbit index (hue = which symmetric copy folded here)'
-    : 'gamut position';
-  setStatus('color mode: ' + label);
-});
-
-const inDens  = document.getElementById('dens');
-const inPitch = document.getElementById('pitch');
-const inSize  = document.getElementById('size');
-const inTilt  = document.getElementById('tilt');
-const inSpin  = document.getElementById('spin');
-const inHaze  = document.getElementById('haze');
-const inKin   = document.getElementById('kin');
-const inHoriz = document.getElementById('horizon');
-
 function debounce(fn, ms){
   let h = 0;
   return (...a) => { if (h) clearTimeout(h); h = setTimeout(() => { h = 0; fn(...a); }, ms); };
 }
+/* A slider or the levels editor changed the recipe: stop generation now,
+   and rebuild once the input settles. */
 const commitConfiguration = debounce(() => flushLattice(), 200);
 function applyConfiguration(){ pool.invalidate(true); commitConfiguration(); }
-const applyDensity = applyConfiguration;
-inDens.addEventListener('input', () => {
-  Mint.density = parseInt(inDens.value, 10) / 100;
-  setStatus('generation density ' + inDens.value + '%');
-  applyDensity();
-});
 
 /* =====================================================================
-   LEVELS EDITOR — arbitrary {radix,gap} tier list, global (like density),
-   not per-cell. Editing it invalidates every cached specimen since it
-   changes their resolution. MAX_R (config.js) caps the per-specimen
-   cell count.
+   CONTROLS (ui/controls.js) and LEVELS EDITOR (ui/levels-editor.js)
    ===================================================================== */
-const applyLevels = applyConfiguration;
-const lvRows = document.getElementById('lvrows'), resLine = document.getElementById('resLine');
-
-document.getElementById('tierSymmetry').onchange=e=>{ Tier.symmetry=e.target.checked; renderLevelRows(); applyLevels(); };
-function tierExample(outer,inner){
-  if(Tier.levels.length<2) Tier.levels=[{radix:3,gap:.30},{radix:3,gap:.06}];
-  Tier.levels=Tier.levels.map((l,i)=>({...l,sym:i===0?outer:inner}));
-  Tier.symmetry=true; document.getElementById('tierSymmetry').checked=true;
-  renderLevelRows(); applyLevels();
-}
-document.getElementById('tierMirrorSpin').onclick=()=>tierExample(1,5);
-document.getElementById('tierCubeFree').onclick=()=>tierExample(9,0);
-
-function renderLevelRows(){
-  lvRows.innerHTML = '';
-  Tier.levels.forEach((lv, i) => {
-    const row = document.createElement('div'); row.className = 'lvrow';
-    row.innerHTML =
-      `<span class="idx">${i===0?'out':(i===Tier.levels.length-1?'in':i)}</span>` +
-      `<input type="number" min="2" max="12" value="${lv.radix}" data-i="${i}" class="radixIn">` +
-      `<input type="range" min="0" max="100" value="${Math.round(lv.gap*100)}" data-i="${i}" class="gapIn" title="Sibling spacing at this tier (% of child width)">` +
-      `<span class="gapv">${lv.gap.toFixed(2)}</span>` +
-      `<button data-i="${i}" class="delBtn" title="remove this level">×</button>`;
-    const select=document.createElement('select');
-    select.className='tierGroup'; select.disabled=!Tier.symmetry;
-    select.setAttribute('aria-label',`Tier ${i+1} symmetry`);
-    select.add(new Option('inherit specimen group', '-1'));
-    GROUPS.forEach((g,j)=>select.add(new Option(g.name+' ('+g.order+')',String(j))));
-    select.value=String(lv.sym ?? -1);
-    select.onchange=()=>{ lv.sym=+select.value; applyLevels(); };
-    row.appendChild(select);
-    lvRows.appendChild(row);
-  });
-  const R = levelResolution(Tier.levels);
-  resLine.textContent = `R=${R} · ${(R*R*R).toLocaleString()} cells`;
-
-  lvRows.querySelectorAll('.radixIn').forEach(el => el.onchange = e => {
-    const i = +e.target.dataset.i, want = Math.max(2, Math.min(12, parseInt(e.target.value) || 2));
-    const trial = Tier.levels.map((l,k) => k===i ? { ...l, radix:want } : l);
-    if (levelResolution(trial) > MAX_R){
-      console.warn(`[bimoblock] radix change rejected: R would exceed MAX_R=${MAX_R}`);
-      setStatus(`too large — R capped at ${MAX_R}`);
-      e.target.value = Tier.levels[i].radix;
-      return;
-    }
-    Tier.levels[i].radix = want;
-    renderLevelRows();
-    setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
-    applyLevels();
-  });
-  lvRows.querySelectorAll('.gapIn').forEach(el => el.oninput = e => {
-    const i = +e.target.dataset.i;
-    Tier.levels[i].gap = (+e.target.value) / 100;
-    e.target.parentElement.querySelector('.gapv').textContent = Tier.levels[i].gap.toFixed(2);
-    setStatus(`${i===0?'outer':i===Tier.levels.length-1?'inner':'level '+i} tier gap ${Math.round(Tier.levels[i].gap*100)}%`);
-    applyLevels();
-  });
-  lvRows.querySelectorAll('.delBtn').forEach(el => el.onclick = e => {
-    if (Tier.levels.length <= 1) return;
-    Tier.levels.splice(+e.target.dataset.i, 1);
-    renderLevelRows();
-    setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
-    applyLevels();
-  });
-}
-document.getElementById('btnAddLevel').addEventListener('click', () => {
-  const trial = [...Tier.levels, { radix:3, gap:0.1 }];
-  if (levelResolution(trial) > MAX_R){
-    console.warn(`[bimoblock] add-level rejected: R would exceed MAX_R=${MAX_R}`);
-    setStatus(`too large — R capped at ${MAX_R}`);
-    return;
-  }
-  Tier.levels.push({ radix:3, gap:0.1 });
-  renderLevelRows();
-  setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
-  applyLevels();
-});
-document.getElementById('btnDelLevel').addEventListener('click', () => {
-  if (Tier.levels.length <= 1) return;
-  Tier.levels.pop();
-  renderLevelRows();
-  setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
-  applyLevels();
-});
-document.querySelectorAll('#levelsPanel .presets button').forEach(b => b.addEventListener('click', () => {
-  const p = b.dataset.preset;
-  const next = PRESETS[p] || Tier.levels;
-  if (levelResolution(next) > MAX_R){
-    console.warn(`[bimoblock] preset '${p}' rejected: R=${levelResolution(next)} exceeds MAX_R=${MAX_R}`);
-    setStatus(`preset too large — R capped at ${MAX_R}`);
-    return;
-  }
-  Tier.levels = next.map((l,i)=>({...l,sym:Tier.levels[i]?.sym ?? -1}));
-  renderLevelRows();
-  setStatus(`levels [${Tier.levels.map(l=>l.radix).join('×')}] → R=${levelResolution(Tier.levels)}`);
-  applyLevels();
-}));
-renderLevelRows();
-
-inPitch.addEventListener('input', () => {
-  CFG.CELL = parseInt(inPitch.value, 10) / 10;
-  virtualiser.invalidate();
-  setStatus('lattice pitch ' + CFG.CELL.toFixed(1));
-});
-inSize.addEventListener('input', () => {
-  CFG.BLOCK_S = parseInt(inSize.value, 10) / 100;
-  setStatus('specimen size ' + CFG.BLOCK_S.toFixed(2));
-});
-inTilt.addEventListener('input', () => {
-  rig.tilt = parseInt(inTilt.value, 10) * Math.PI / 180;
-  rig.tilt = clamp(rig.tilt, 0.52, 1.535);
-  rig.apply(); virtualiser.invalidate();
-});
-function setTiltSlider(){ inTilt.value = String(Math.round(rig.tilt * 180 / Math.PI)); }
-inSpin.addEventListener('input', () => { State.spin = parseInt(inSpin.value, 10) / 100; });
-inHaze.addEventListener('input', () => { State.haze = parseInt(inHaze.value, 10) / 100; });
-
-inKin.addEventListener('input', () => {
-  Pin.radius = parseInt(inKin.value, 10);
-  const n = 2 * Pin.radius + 1;
-  setStatus('district radius ' + Pin.radius + '  ·  ' + (n * n) + ' relatives');
-  if (Pin.on){ Pin.epoch++; virtualiser.invalidate(); }
-});
-
-inHoriz.addEventListener('input', () => {
-  CFG.MAX_VISIBLE = Math.min(CFG.POD_MAX, parseInt(inHoriz.value, 10));
-  virtualiser.invalidate();
-  setStatus('horizon holds ' + CFG.MAX_VISIBLE + ' specimens');
-});
-
-const btnHome   = document.getElementById('home');
-const btnWarp   = document.getElementById('warp');
-const btnAlign  = document.getElementById('align');
-const btnBloom  = document.getElementById('bloom');
-const btnLabels = document.getElementById('labelsBtn');
-const btnKey    = document.getElementById('keyBtn');
-const btnShuf   = document.getElementById('shuffle');
-const btnSheet  = document.getElementById('expSheet');
-const btnObj    = document.getElementById('expObj');
-const inGoto    = document.getElementById('goto');
-
-btnHome.addEventListener('click', () => { rig.glideTo(0, 0, 15); setFocus(0, 0, false); setStatus('returned to origin'); });
-btnWarp.addEventListener('click', () => {
-  const i = (Math.random() * 2000 - 1000) | 0, j = (Math.random() * 2000 - 1000) | 0;
-  rig.x = cellWorldX(i); rig.z = cellWorldZ(j);
-  rig.vx = rig.vz = 0;
-  virtualiser.invalidate();
-  setFocus(i, j, false);
-  showToast(`warped to district ${i}, ${j}`);
-});
-btnAlign.addEventListener('click', () => {
-  State.align = !State.align;
-  btnAlign.classList.toggle('on', State.align);
-  setStatus(State.align ? 'specimens aligned for comparison' : 'idle rotation resumed');
-});
-function syncBloomUI(){
-  inKin.value = String(Pin.radius);
-  btnBloom.classList.toggle('on', Bloom.on);
-}
-btnBloom.addEventListener('click', () => {
-  Bloom.on = !Bloom.on;
-  btnBloom.classList.toggle('on', Bloom.on);
-  if (Bloom.on){
-    pinAt(Focus.i, Focus.j);
-    const p = focusedData();
-    showToast(p ? `blooming ${Focus.i}, ${Focus.j} · ${ARCH_NAMES[p.arch]} · ${symmetryLabel(p)}`
-                : `blooming ${Focus.i}, ${Focus.j}`);
-  } else {
-    unpin();
-    setStatus('district released — lattice restored');
-  }
-});
-btnLabels.addEventListener('click', () => {
-  State.labels = !State.labels;
-  labels.markDirty();
-  btnLabels.classList.toggle('on', State.labels);
-});
-btnKey.addEventListener('click', () => {
-  State.legend = !State.legend;
-  btnKey.classList.toggle('on', State.legend);
-  hud.setLegendVisible(State.legend);
-});
-btnShuf.addEventListener('click', () => {
-  Mint.gen++;
-  flushLattice();
-  writeHash();
-  showToast('lattice re-minted — generation ' + Mint.gen);
-});
-
-inGoto.addEventListener('keydown', (e) => {
-  e.stopPropagation();
-  if (e.key !== 'Enter') return;
-  const m = /^\s*(-?\d+)\s*[, ]\s*(-?\d+)\s*$/.exec(inGoto.value);
-  if (!m){ setStatus('address must look like  12, -7'); return; }
-  const i = parseInt(m[1], 10), j = parseInt(m[2], 10);
-  const far = Math.hypot(cellWorldX(i) - rig.x, cellWorldZ(j) - rig.z) > CFG.CELL * 26;
-  if (far){ rig.x = cellWorldX(i); rig.z = cellWorldZ(j); virtualiser.invalidate(); }
-  else rig.glideTo(i, j);
-  setFocus(i, j, false);
-  inGoto.blur();
-  showToast(`cell ${i}, ${j}`);
-});
-
-window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
-  const step = e.shiftKey ? 5 : 1;
-  switch (e.key){
-    case 'ArrowLeft':  rig.glideTo(Focus.i - step, Focus.j); setFocus(Focus.i - step, Focus.j, false); e.preventDefault(); break;
-    case 'ArrowRight': rig.glideTo(Focus.i + step, Focus.j); setFocus(Focus.i + step, Focus.j, false); e.preventDefault(); break;
-    case 'ArrowUp':    rig.glideTo(Focus.i, Focus.j + step); setFocus(Focus.i, Focus.j + step, false); e.preventDefault(); break;
-    case 'ArrowDown':  rig.glideTo(Focus.i, Focus.j - step); setFocus(Focus.i, Focus.j - step, false); e.preventDefault(); break;
-    case '[': setFocus(Focus.i - 1, Focus.j, true); break;
-    case ']': setFocus(Focus.i + 1, Focus.j, true); break;
-    case 'a': case 'A': btnAlign.click(); break;
-    case 'b': case 'B': btnBloom.click(); break;
-    case 'l': case 'L': btnLabels.click(); break;
-    case 'k': case 'K': btnKey.click(); break;
-    case 'g': case 'G': btnShuf.click(); break;
-    case 'h': case 'H': btnHome.click(); break;
-    case 'w': case 'W': btnWarp.click(); break;
-    case 'o': case 'O': exportSpecimen(); break;
-    case 'e': case 'E': exportSheet(); break;
-    case 'c': case 'C': copyAddress(); break;
-  }
-});
+const controls = new Controls({ rig, virtualiser, hud, labels,
+  actions: { setFocus, pinAt, unpin, flushLattice, applyConfiguration } });
+new LevelsEditor({ setStatus, onChange: applyConfiguration });
+const setTiltSlider = () => controls.setTiltSlider();
 
 window.addEventListener('resize', () => {
   stage.resize();
@@ -632,35 +331,12 @@ window.addEventListener('resize', () => {
   virtualiser.invalidate();
 });
 
-function copyAddress(){
-  commitHash(rig);
-  const text = location.href.split('#')[0] + hashString(rig);
-  if (navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text)
-      .then(() => showToast('address copied — ' + Focus.i + ', ' + Focus.j))
-      .catch(err => { console.warn('clipboard refused', err); showToast('copy blocked; see console'); console.log(text); });
-  } else {
-    console.log(text);
-    showToast('address logged to console');
-  }
-}
-
-/* =====================================================================
-   EXPORTERS
-   ===================================================================== */
-const exportSpecimen = () => exportSpecimenOBJ({ specimen: focusedData(), toast: showToast });
-const exportSheet    = () => exportSheetOBJ({ rig, visible: virtualiser.visible, cache: virtualiser.cache, toast: showToast });
-btnSheet.addEventListener('click', exportSheet);
-btnObj.addEventListener('click', exportSpecimen);
-
 /* =====================================================================
    MAIN LOOP
    ===================================================================== */
 const clock = new THREE.Clock();
 
-syncFilterEnablement();
-setTiltSlider();
-if (!readHash({ rig, setFocus, onBloom: syncBloomUI })) setFocus(0, 0, false);
+if (!readHash({ rig, setFocus, onBloom: () => controls.syncBloomUI() })) setFocus(0, 0, false);
 rig.apply();
 virtualiser.computeVisible();
 pool.start();
