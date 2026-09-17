@@ -230,23 +230,37 @@ This is where design happens. Each class gets the state it owns as fields and
 receives its collaborators through the constructor. No class reaches for
 another via a global.
 
-- [ ] `scene/rig.js` — `class CameraRig { constructor(camera, cfg) … apply(), groundAt(), ndcOf(), glideTo(), zoomBy(), get cellI/cellJ }`.
+- [x] `scene/rig.js` — `class CameraRig { constructor(camera, domElement) … apply(), groundAt(), ndcOf(), zoomBy(), glideTo(), coast(dt), get cellI/cellJ }`.
       Replaces the `Rig` object and the `_ray/_v2/_hit` scratch vectors.
-- [ ] `scene/scene.js` — `class ShowroomScene` owning renderer, scene, camera,
-      lights, floor, pods, rings, `blocksG`, `resize()`.
-- [ ] `scene/virtualiser.js` — `class Virtualiser { cache, slots, spare, visible, visKeys; computeVisible(rig), evict(), takeMesh(), releaseSlot(), keyOf() }`.
-- [ ] `lattice/generation.js` — `class GenerationPool { constructor(virtualiser, perf, { workerCount, forceFullGeometry }) ; start(), suspend(), resume(), invalidate(paused), service(), flush() }`.
-      Also owns the `pagehide/pageshow` listeners.
-- [ ] `scene/labels.js` — `class LabelOverlay { constructor(canvas, rig, virtualiser) ; markDirty(), resize(), draw() }`.
-- [ ] `ui/hud.js` — `class Hud` for status/toast/inspector/legend/coord, with
-      timers ticked from the loop (`hud.tick(dt)`).
-- [ ] `ui/input.js` — `class Navigation` for pointer map, drag modes, pinch,
-      keyboard; emits nothing, just mutates the rig and calls `onMoved()`.
-- [ ] `ui/controls.js` and `ui/levels-editor.js` — classes that bind DOM
-      elements in the constructor and take callbacks (`onConfigurationChange`).
-- [ ] `scene/layout.js` — stays a function: `layout(t, dt, { rig, virtualiser, scene, state })`.
-- [ ] `main.js` becomes a ~120-line composition root: construct everything,
-      wire callbacks, `readHash()`, start `frame()`.
+      Design note: the rig no longer *notifies* anyone it moved (the old
+      `applyRig()`/`markMoved()` side effects). The virtualiser
+      (`needsRefresh()`) and the label overlay (`draw()`) compare its pose
+      against the one they last used, once per frame at the same point the
+      old flags were checked — same visible sets, no back-reference.
+- [x] `scene/scene.js` — `class ShowroomScene` owning renderer, scene, camera,
+      lights, floor, pods, rings, `blocksG`, `resize()`, `render()`.
+- [x] `scene/virtualiser.js` — `class Virtualiser { cache, slots, spare, visible, visKeys; computeVisible(), evict(), takeMesh(), releaseSlot(), keyOf(), at(i,j), install(), lodOf(), flush(), invalidate(), needsRefresh() }`.
+      Its `revision` counter (bumped on computeVisible/install/flush) is what
+      the labels watch, replacing the scattered `labelsDirty = true` writes.
+- [x] `lattice/generation.js` — `class GenerationPool { constructor(virtualiser, rig, { workerCount }) ; start(), suspend(), resume(), invalidate(paused), service(), dispatch(), failed(type,i,j), get liveWorkers }`.
+      Also owns the `pagehide/pageshow` listeners. `flushLattice()` stayed in
+      main.js: it spans the pool, the virtualiser and the HUD.
+- [x] `scene/labels.js` — `class LabelOverlay { constructor(canvas, rig, virtualiser) ; markDirty(), resize(), draw() }`.
+- [x] `ui/hud.js` — `class Hud` for status/toast/inspector/legend/coord, with
+      timers ticked from the loop (`hud.tick(rawDt, dt, frameTris)`); also owns
+      the fps estimate, since the inspector is its only reader.
+- [x] `ui/input.js` — `class Navigation` for pointer map, drag modes, pinch,
+      wheel; mutates the rig and calls `onFocus(i,j)` / `onOrbit()`. The
+      keyboard map went to `Controls` instead, since every key drives a
+      button or action that class already owns.
+- [x] `ui/controls.js` and `ui/levels-editor.js` — classes that bind DOM
+      elements in the constructor. `Controls` takes `{ rig, virtualiser, hud,
+      labels, actions }` where `actions = { setFocus, pinAt, unpin,
+      flushLattice, applyConfiguration }`; `LevelsEditor` takes
+      `{ setStatus, onChange }`. OBJ export and copy-address live in `Controls`.
+- [x] `scene/layout.js` — stays a function: `layout(t, dt, { rig, virtualiser, stage, forceFullGeometry })`, returns the frame's triangle count.
+- [x] `main.js` is a 200-line composition root: construct everything, define
+      the five cross-owner operations, `readHash()`, start `frame()`.
 
 Rule of thumb for what goes in a constructor vs. a method parameter:
 long-lived collaborators (scene, rig, virtualiser) → constructor; per-frame
@@ -254,6 +268,14 @@ values (`t`, `dt`) → parameters.
 
 Exit criterion: no top-level `let` in `main.js` except the loop's clock; every
 mutable object has exactly one owner; smoke checklist and Node tests pass.
+**Met** (commits 74829e2..97b29a0, 9 steps). Verified headless after every
+step: `#0,0,15.0,0`, `?workers=0#7,-3,12.0,3,7.-3.4` and
+`?fullGeometry=1&workers=1` give the Phase 2/3 reference values, and a
+CDP-driven interaction script (keys `]`/arrows/H/B/G/A/L/K, real mouse
+click, pan-drag, shift-drag orbit, wheel, `tower3`/`classic` presets, axis
+select, goto box, density slider) produces a transcript identical to the
+pre-Phase-4 commit 6d55c1b except for frame-timing noise (the permalink
+height sampled mid-glide, and total install/draw-call counts).
 
 ### Phase 5 — Optional hardening (only if wanted)
 
