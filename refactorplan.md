@@ -172,11 +172,11 @@ Exit criterion: three files, identical behaviour, one commit.
 
 ### Phase 2 — Extract the pure core and convert the worker (one commit)
 
-- [ ] `src/core/bimoblock-core.js`: move `createBimoblockCore` verbatim.
+- [x] `src/core/bimoblock-core.js`: move `createBimoblockCore` verbatim.
       `export function createBimoblockCore(){…}` and
       `export const Core = createBimoblockCore()` for the main thread.
-- [ ] `src/core/jobs.js`: `export function runNumericJob(core, job)`.
-- [ ] `src/core/worker.js`:
+- [x] `src/core/jobs.js`: `export function runNumericJob(core, job)`.
+- [x] `src/core/worker.js`:
       ```js
       import { createBimoblockCore } from './bimoblock-core.js';
       import { runNumericJob } from './jobs.js';
@@ -184,12 +184,12 @@ Exit criterion: three files, identical behaviour, one commit.
       self.onmessage = ({ data: job }) => { /* body of bimoblockWorkerMain */ };
       self.postMessage({ ready: true });
       ```
-- [ ] In `startGeneration()`: delete the Blob/`toString` construction; replace
+- [x] In `startGeneration()`: delete the Blob/`toString` construction; replace
       `new Worker(Generation.sourceURL)` with
       `new Worker(new URL('./core/worker.js', import.meta.url), { type: 'module' })`.
       Keep the try/catch and the `'compatibility'` fallback — it now covers
       browsers without module workers.
-- [ ] Point `test/core.test.js` at the real module; delete the extraction
+- [x] Point `test/core.test.js` at the real module; delete the extraction
       hack. `node --test test/` must pass with the golden hashes.
 - [ ] Verify: worker path (default) and main-thread path (`?workers=0`) both
       produce identical specimens at the same address (compare inspector
