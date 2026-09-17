@@ -12,6 +12,7 @@ import { CameraRig } from './scene/rig.js';
 import { Virtualiser } from './scene/virtualiser.js';
 import { LabelOverlay } from './scene/labels.js';
 import { Hud } from './ui/hud.js';
+import { Navigation } from './ui/input.js';
 import { GenerationPool } from './lattice/generation.js';
 
 "use strict";
@@ -54,8 +55,6 @@ const stage = new ShowroomScene(document.getElementById('stage'));
 const { renderer, scene, camera, floor, floorMat, pods, focusRing, hoverRing, blocksG } = stage;
 const rig = new CameraRig(camera, renderer.domElement);
 
-const _v2  = new THREE.Vector2();
-const _hit = new THREE.Vector3();
 const _p3  = new THREE.Vector3();
 
 /* =====================================================================
@@ -298,103 +297,12 @@ function setFocus(i, j, announce){
 }
 
 /* =====================================================================
-   NAVIGATION INPUT
+   NAVIGATION INPUT — ui/input.js
    ===================================================================== */
-
-const pointers = new Map();
-let dragMode = null;         // 'pan' | 'orbit'
-let dragAnchor = null;
-let dragStart = null;
-let pinchDist = 0;
-
-renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
-
-renderer.domElement.addEventListener('pointerdown', (e) => {
-  renderer.domElement.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
-
-  if (pointers.size === 2){
-    const pts = [...pointers.values()];
-    pinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    dragMode = 'pinch';
-    return;
-  }
-
-  dragStart = { x:e.clientX, y:e.clientY, t:performance.now() };
-  rig.vx = rig.vz = 0;
-  if (e.shiftKey || e.button === 2 || e.button === 1){
-    dragMode = 'orbit';
-  } else {
-    dragMode = 'pan';
-    rig.apply();
-    rig.ndcOf(e, _v2);
-    rig.groundAt(_v2.x, _v2.y, _hit);
-    dragAnchor = _hit.clone();
-  }
+const nav = new Navigation(rig, {
+  onFocus: (i, j) => setFocus(i, j, true),
+  onOrbit: () => setTiltSlider()
 });
-
-renderer.domElement.addEventListener('pointermove', (e) => {
-  const prev = pointers.get(e.pointerId);
-  if (prev){ prev.x = e.clientX; prev.y = e.clientY; }
-
-  if (dragMode === 'pinch' && pointers.size === 2){
-    const pts = [...pointers.values()];
-    const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    if (pinchDist > 1 && d > 1){
-      rig.zoomBy(pinchDist / d, 0, 0);
-      pinchDist = d;
-    }
-    return;
-  }
-
-  if (dragMode === 'orbit' && prev){
-    rig.yaw  -= (e.movementX || 0) * 0.005;
-    rig.tilt = clamp(rig.tilt + (e.movementY || 0) * 0.004, 0.52, 1.535);
-    setTiltSlider();
-    rig.apply();
-    return;
-  }
-
-  if (dragMode === 'pan' && dragAnchor){
-    rig.ndcOf(e, _v2);
-    rig.groundAt(_v2.x, _v2.y, _hit);
-    const dx = _hit.x - dragAnchor.x, dz = _hit.z - dragAnchor.z;
-    rig.x -= dx; rig.z -= dz;
-    rig.vx = -dx * 14; rig.vz = -dz * 14;
-    rig.apply();
-    return;
-  }
-
-  // Idle hover: the cell under the cursor, straight from the plane.
-  rig.ndcOf(e, _v2);
-  if (rig.groundAt(_v2.x, _v2.y, _hit)){
-    Hover.i = Math.round(_hit.x / CFG.CELL);
-    Hover.j = Math.round(-_hit.z / CFG.CELL);
-    Hover.on = true;
-  } else Hover.on = false;
-});
-
-function endPointer(e){
-  pointers.delete(e.pointerId);
-  if (dragMode === 'pan' && dragStart){
-    const moved = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
-    if (moved < 5){
-      rig.vx = rig.vz = 0;
-      rig.ndcOf(e, _v2);
-      if (rig.groundAt(_v2.x, _v2.y, _hit))
-        setFocus(Math.round(_hit.x / CFG.CELL), Math.round(-_hit.z / CFG.CELL), true);
-    }
-  }
-  if (pointers.size < 2){ dragMode = null; dragAnchor = null; dragStart = null; }
-}
-renderer.domElement.addEventListener('pointerup', endPointer);
-renderer.domElement.addEventListener('pointercancel', endPointer);
-
-renderer.domElement.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  rig.ndcOf(e, _v2);
-  rig.zoomBy(Math.exp(clamp(e.deltaY, -160, 160) * 0.0013), _v2.x, _v2.y);
-}, { passive: false });
 
 /* =====================================================================
    CONTROLS
@@ -765,7 +673,7 @@ function frame(){
   State.time += dt;
 
   // Inertial glide after a flick.
-  if (!dragMode) rig.coast(dt);
+  if (!nav.dragging) rig.coast(dt);
 
   if (virtualiser.needsRefresh()){
     const visibilityStarted = performance.now();
