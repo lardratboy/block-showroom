@@ -1,0 +1,56 @@
+{
+  "origin-classic": {
+    "R": 9,
+    "filled": 63,
+    "envelopeCells": 251,
+    "occ": "485c0568",
+    "pos": "cbe48395",
+    "idx": "7b5e10bd",
+    "aut": 1
+  },
+  "mech-shells": {
+    "R": 9,
+    "filled": 89,
+    "envelopeCells": 222,
+    "occ": "997aeb26",
+    "pos": "f42d007d",
+    "idx": "fc021645",
+    "aut": 4
+  },
+  "crystal-diamond": {
+    "R": 27,
+    "filled": 1064,
+    "envelopeCells": 5903,
+    "occ": "7dd46cf7",
+    "pos": "e6972a75",
+    "idx": "2d4f9ac5",
+    "aut": 6
+  },
+  "orbiter-hetero": {
+    "R": 24,
+    "filled": 1472,
+    "envelopeCells": 4456,
+    "occ": "db25432d",
+    "pos": "af98eee5",
+    "idx": "cce1c5c5",
+    "aut": 24
+  },
+  "full-n5": {
+    "R": 5,
+    "filled": 7,
+    "envelopeCells": 13,
+    "occ": "0fb646d4",
+    "pos": "9366cf45",
+    "idx": "55698f65",
+    "aut": 48
+  },
+  "tier-symmetry": {
+    "R": 9,
+    "filled": 60,
+    "envelopeCells": 153,
+    "occ": "6c069f2f",
+    "pos": "3de93a05",
+    "idx": "fb634885",
+    "aut": 8
+  }
+}

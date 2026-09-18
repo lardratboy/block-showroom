@@ -1,0 +1,13 @@
+{
+  "name": "block-showroom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tiered voxel object generator",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8000",
+    "test": "node --test test/*.test.js",
+    "golden": "node test/make-golden.js",
+    "test:browser": "node --test test/browser/*.test.js"
+  }
+}
