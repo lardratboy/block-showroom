@@ -4,6 +4,8 @@
    and color gamut domain mapping.
    ================================================================ */
 // Canonical numeric core. This factory is also the complete worker dependency.
+// PHASE 0 build: orbit enumeration + exact quickselect. Output is byte-identical
+// to the reference core; see verify-phase0.mjs.
 export function createBimoblockCore(){
 const clamp = (v,a,b) => v < a ? a : v > b ? b : v;
 const PERM = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
@@ -508,6 +510,67 @@ function tierField(sx, sy, sz, mode, effSeed, levels, R){
   return c0*B[0] + c1*B[1] + c2*B[2] + 0.28*(A[0]*B[1] + A[1]*B[2] + A[2]*B[0]);
 }
 
+/* =====================================================================
+   PHASE 0 — ORBIT ENUMERATION
+   ---------------------------------------------------------------------
+   The old inner loop called foldOrbit() once per cell: |G| matrix applies
+   to find the lexicographic minimum of the orbit. That is |G| times more
+   work than the information content, because the field is constant on
+   orbits by construction.
+
+   Instead: walk cells in scan order; the first unvisited cell begins a new
+   orbit. Generate the orbit once (|G| applies), evaluate envelope+field ONCE
+   at its canonical representative, and scatter the result to every member.
+   Cost falls from |G|*R^3 to |G|*(number of orbits) — measured 46x fewer
+   orbits than cells at R=243 under Oh.
+
+   The only delicate part is `orbit[]`, which stores per-cell the index of
+   the group element that wins the fold — different for each orbit member.
+   For w = els[j]·v it is derived, not searched:
+
+       els[i]·w = canon   <=>   els[i]els[j]·v = canon
+                          <=>   MUL[i][j] ∈ W        (W = winners for v)
+                          <=>   i = MUL[p][INV[j]],  p ∈ W
+
+   so one table lookup per member per winner reproduces foldOrbit's choice
+   exactly, including its lowest-index tie-break.
+   ===================================================================== */
+function groupTables(els){
+  const n = els.length;
+  const MUL = new Uint8Array(n * n), INV = new Uint8Array(n);
+  const where = new Map();
+  for (let i = 0; i < n; i++) where.set(els[i], i);
+  for (let a = 0; a < n; a++){
+    for (let b = 0; b < n; b++){
+      const c = where.get(mulE(els[a], els[b]));
+      MUL[a * n + b] = c;
+      if (els[c] === 0) INV[a] = b;      // els[a]·els[b] = identity
+    }
+  }
+  return { MUL, INV, n };
+}
+
+/* Exact k-th smallest, in place, O(n) average. Replaces a full sort whose
+   only output was one order statistic. Returns the same value the sort did,
+   so the >= comparison downstream selects byte-identically. */
+function quickSelect(a, k){
+  let lo = 0, hi = a.length - 1;
+  while (lo < hi){
+    const mid = (lo + hi) >> 1;
+    // median of three, to avoid the sorted-input worst case
+    let p = a[mid];
+    if ((a[lo] < p) !== (p < a[hi])) p = (a[lo] < a[hi]) === (a[lo] < p) ? a[hi] : a[lo];
+    let i = lo, j = hi;
+    while (i <= j){
+      while (a[i] < p) i++;
+      while (a[j] > p) j--;
+      if (i <= j){ const t = a[i]; a[i] = a[j]; a[j] = t; i++; j--; }
+    }
+    if (k <= j) hi = j; else if (k >= i) lo = i; else return a[k];
+  }
+  return a[lo];
+}
+
 /** Number of the 48 Oh elements that map the occupancy onto itself.
  *  @param {Uint8Array} occ @param {number} R @returns {number} */
 function autOrder(occ, R){
@@ -714,21 +777,89 @@ function buildBlock(P, levels){
   if (fmode >= NATIVE_FIELDS && fmode < LEGACY_FIELD_COUNT)
     pars.scale[fmode - NATIVE_FIELDS] = planarScale(PLANAR[fmode - NATIVE_FIELDS], pars.conic, R);
 
-  const idxArr = [], vals = [];
+  // Envelope cells are collected into preallocated typed arrays rather than
+  // grown JS arrays: at R=243 that is 7.3M pushes avoided. Falls back to plain
+  // arrays past 32M cells, where an R^3-sized Float64Array stops being sane.
+  const NCELL = R*R*R, typed = NCELL <= 33554432;
+  const idxArr = typed ? new Int32Array(NCELL) : [];
+  const vals   = typed ? new Float64Array(NCELL) : [];
+  let nVals = 0;
   const orbit = new Uint8Array(R*R*R); // winning fold-element index per cell (only meaningful where occ ends up 1)
-  for (let z = 0; z < R; z++){ const sz0 = foldedAxis(z, levels);
-    for (let y = 0; y < R; y++){ const sy0 = foldedAxis(y, levels);
-      for (let x = 0; x < R; x++){ const sx0 = foldedAxis(x, levels);
-        let s, bi;
-        if (foldTier){ s = foldTier(x,y,z); bi = foldTier.outerOrbit(x,y,z); }
-        else { s = foldOrbit([sx0, sy0, sz0], G.els); bi = s[3]; }
-        if (!envelope(s[0], s[1], s[2], P.arch)) continue;
-        const flat = x + R*y + R*R*z;
-        idxArr.push(flat);
-        orbit[flat] = bi;
-        vals.push(fmode < LEGACY_FIELD_COUNT
-          ? field(s[0], s[1], s[2], fmode, P.seed, P.lift, pars, R)
-          : tierField(s[0], s[1], s[2], fmode - LEGACY_FIELD_COUNT, P.seed, levels, R));
+  const evalOne = (s0, s1, s2) => fmode < LEGACY_FIELD_COUNT
+    ? field(s0, s1, s2, fmode, P.seed, P.lift, pars, R)
+    : tierField(s0, s1, s2, fmode - LEGACY_FIELD_COUNT, P.seed, levels, R);
+
+  if (foldTier){
+    // tierFolder already works from per-level lookup tables, so the per-cell
+    // cost is a handful of array reads; this path is left exactly as it was.
+    for (let z = 0; z < R; z++){
+      for (let y = 0; y < R; y++){
+        for (let x = 0; x < R; x++){
+          const s = foldTier(x,y,z), bi = foldTier.outerOrbit(x,y,z);
+          if (!envelope(s[0], s[1], s[2], P.arch)) continue;
+          const flat = x + R*y + R*R*z;
+          orbit[flat] = bi;
+          const v = evalOne(s[0], s[1], s[2]);
+          if (typed){ idxArr[nVals] = flat; vals[nVals] = v; } else { idxArr.push(flat); vals.push(v); }
+          nVals++;
+        }
+      }
+    }
+  } else {
+    const half = (R - 1) / 2;
+    const ax = new Float64Array(R);
+    for (let u = 0; u < R; u++) ax[u] = foldedAxis(u, levels);
+    const els = G.els, nE = els.length;
+    const { MUL, INV } = groupTables(els);
+    const visited = new Uint8Array(R*R*R);
+    // NOTE: half is a half-integer when R is even, so orbit members carry
+    // half-integer coordinates. These must stay floats — an Int32Array here
+    // truncates and silently corrupts every even-radix lattice.
+    const mX = new Float64Array(nE), mY = new Float64Array(nE), mZ = new Float64Array(nE);
+    const W = new Int32Array(nE);
+
+    for (let z = 0; z < R; z++){
+      for (let y = 0; y < R; y++){
+        for (let x = 0; x < R; x++){
+          const flat = x + R*y + R*R*z;
+          if (visited[flat]) continue;
+
+          // generate the orbit, and record which elements win the fold
+          const v = [x - half, y - half, z - half];
+          let bx = v[0], by = v[1], bz = v[2], nW = 0;
+          for (let j = 0; j < nE; j++){
+            const w = applyG(v, els[j]);
+            mX[j] = w[0]; mY[j] = w[1]; mZ[j] = w[2];
+            if (w[0] < bx || (w[0] === bx && (w[1] < by || (w[1] === by && w[2] < bz)))){
+              bx = w[0]; by = w[1]; bz = w[2]; nW = 0; W[nW++] = j;
+            } else if (w[0] === bx && w[1] === by && w[2] === bz){
+              W[nW++] = j;
+            }
+          }
+
+          // one envelope test and one field evaluation for the whole orbit
+          const s0 = ax[Math.round(bx + half)], s1 = ax[Math.round(by + half)],
+                s2 = ax[Math.round(bz + half)];
+          const inEnv = envelope(s0, s1, s2, P.arch);
+          const val = inEnv ? evalOne(s0, s1, s2) : 0;
+
+          for (let j = 0; j < nE; j++){
+            const fj = Math.round(mX[j] + half) + R*Math.round(mY[j] + half)
+                     + R*R*Math.round(mZ[j] + half);
+            if (visited[fj]) continue;
+            visited[fj] = 1;
+            if (!inEnv) continue;
+            const ij = INV[j] * 1;
+            let best = nE;
+            for (let p = 0; p < nW; p++){
+              const i = MUL[W[p] * nE + ij];
+              if (i < best) best = i;
+            }
+            orbit[fj] = best;
+            if (typed){ idxArr[nVals] = fj; vals[nVals] = val; } else { idxArr.push(fj); vals.push(val); }
+            nVals++;
+          }
+        }
       }
     }
   }
@@ -736,17 +867,17 @@ function buildBlock(P, levels){
   const evaluated = performance.now();
   const occ = new Uint8Array(R*R*R);
   let filled = 0;
-  if (vals.length){
-    const sorted = Float64Array.from(vals).sort();
-    const want = Math.max(1, Math.round(P.density * vals.length));
-    const cut = sorted[Math.max(0, vals.length - want)];
-    for (let k = 0; k < vals.length; k++)
+  if (nVals){
+    const scratch = typed ? vals.slice(0, nVals) : Float64Array.from(vals);
+    const want = Math.max(1, Math.round(P.density * nVals));
+    const cut = quickSelect(scratch, Math.max(0, nVals - want));
+    for (let k = 0; k < nVals; k++)
       if (vals[k] >= cut){ occ[idxArr[k]] = 1; filled++; }
   }
 
   const selected = performance.now();
   const geometry = meshArrays(occ, 0, filled, levels, R, orbit, orbitOrder);
-  return { occ, R, filled, envelopeCells: vals.length, geometry,
+  return { occ, R, filled, envelopeCells: nVals, geometry,
     timings: { evaluate: evaluated - started, select: selected - evaluated,
       mesh: geometry.timings.mesh, bounds: geometry.timings.bounds,
       total: performance.now() - started } };
