@@ -15,3 +15,7 @@ Run `npm run serve`, open http://localhost:8000/, then:
 11. Console: `showroomPerformance()` returns an object with `installed > 0`.
     (Steps 1, 9, 10 and 11 are also covered by `npm run test:browser`.)
 12. `O` downloads a `.obj`; `E` downloads a sheet `.obj`.
+13. `display:` dropdown: wireframe → box edges only (no diagonals);
+    vertices → a point at every mesh corner; box centers → one point per
+    voxel; solid → back to shaded boxes. Switching is instant (no re-mint)
+    and the `color:` dropdown still recolours every mode.

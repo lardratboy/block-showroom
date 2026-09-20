@@ -49,6 +49,78 @@ export function blockGeometry(occ, tier, filled, levels, R){
   return geometryFromArrays(Core.meshArrays(occ, tier, filled, levels, R));
 }
 
+/* ---- derived display views ----------------------------------------------
+   The wireframe and vertex views share the mesh's vertex buffers outright
+   (the same BufferAttribute objects, so the GPU holds one copy) and differ
+   only in how they are indexed: quads → their four edges, or no index at
+   all so THREE.Points draws every corner. `userData.base` points back at
+   the mesh so layout() can tell whether the shared buffers are uploaded;
+   `bytes` counts only what the view adds. */
+function shareAttributes(view, base){
+  for (const name of ['position', 'colorGamut', 'colorOrbit', 'color'])
+    if (base.attributes[name]) view.setAttribute(name, base.attributes[name]);
+  view.boundingSphere = base.boundingSphere;
+  view.userData.base = base;
+  view.userData.tris = 0;
+  view.userData.colorBound = base.userData.colorBound;
+}
+
+/** Edges of every quad in a meshArrays() geometry (4 verts per quad, in
+ *  face order), as a LineSegments geometry. Shared edges between two exposed
+ *  faces are emitted twice, which draws identically and keeps this a plain
+ *  linear pass with no edge table. */
+export function wireGeometryOf(base){
+  const quads = base.userData.quads || 0, nVerts = quads * 4;
+  const idx = new (nVerts > 65535 ? Uint32Array : Uint16Array)(quads * 8);
+  for (let q = 0, o = 0; q < quads; q++){
+    const b = q * 4;
+    idx[o++] = b;     idx[o++] = b + 1;
+    idx[o++] = b + 1; idx[o++] = b + 2;
+    idx[o++] = b + 2; idx[o++] = b + 3;
+    idx[o++] = b + 3; idx[o++] = b;
+  }
+  const g = new THREE.BufferGeometry();
+  shareAttributes(g, base);
+  const index = new THREE.BufferAttribute(idx, 1);
+  g.setIndex(index);
+  g.userData.bytes = idx.byteLength;
+  g.userData.uploaded = idx.length === 0;
+  index.onUpload(() => { g.userData.uploaded = true; });
+  return g;
+}
+
+/** Every mesh vertex as a point; adds no GPU data of its own. */
+export function pointsGeometryOf(base){
+  const g = new THREE.BufferGeometry();
+  shareAttributes(g, base);
+  g.userData.bytes = 0;
+  g.userData.uploaded = true;
+  return g;
+}
+
+/** One point per occupied voxel at its centre (Core.voxelCenters), coloured
+ *  by gamut position. Independent of the mesh, so it has no `base`. */
+export function centersGeometry(occ, levels, R){
+  const { pos, count, cellSize } = Core.voxelCenters(occ, levels, R);
+  const col = new Float32Array(pos.length);
+  for (let i = 0; i < pos.length; i++) col[i] = pos[i] + 0.5;
+  const g = new THREE.BufferGeometry();
+  const position = new THREE.BufferAttribute(pos, 3);
+  const colGamut = new THREE.BufferAttribute(col, 3);
+  g.setAttribute('position', position);
+  g.setAttribute('colorGamut', colGamut);
+  g.setAttribute('color', colGamut);
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), Math.sqrt(3) / 2);
+  g.userData.tris = 0;
+  g.userData.count = count;
+  g.userData.cellSize = cellSize;
+  g.userData.bytes = pos.byteLength + col.byteLength;
+  g.userData.uploaded = count === 0;
+  g.userData.colorBound = 'gamut';
+  position.onUpload(() => { g.userData.uploaded = true; });
+  return g;
+}
+
 /* Lattice address → world position on the floor plane. */
 export function cellWorldX(i){ return i * CFG.CELL; }
 export function cellWorldZ(j){ return -j * CFG.CELL; }

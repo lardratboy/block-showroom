@@ -22,7 +22,11 @@ export const Pin = { on:false, i:0, j:0, radius:4, epoch:0, params:null, want:nu
 export const State = {
   align: false, labels: true, legend: true,
   spin: 0.34, haze: 0.42, time: 0,
-  colorMode: 'gamut'   // 'gamut' | 'chiral' | 'orbit' — see specimenChiral()
+  colorMode: 'gamut',  // 'gamut' | 'chiral' | 'orbit' — see specimenChiral()
+  /* 'solid' | 'wire' | 'points' | 'centers' — how a specimen's geometry is
+     drawn. Display-only, like colorMode: derived views are built lazily
+     from the cached mesh (Virtualiser.viewOf), never by regenerating. */
+  renderMode: 'solid'
 };
 export const Bloom = { on: false };
 export const Focus = { i:0, j:0 };

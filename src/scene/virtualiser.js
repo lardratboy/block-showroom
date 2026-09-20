@@ -5,8 +5,9 @@
    that generation and layout both walk. */
 import * as THREE from 'three';
 import { CFG } from '../config.js';
-import { Pin, Focus } from '../state.js';
-import { blockGeometry, cellWorldX, cellWorldZ, inDistrict } from '../lattice/recipe.js';
+import { Pin, Focus, State } from '../state.js';
+import { blockGeometry, wireGeometryOf, pointsGeometryOf, centersGeometry,
+         cellWorldX, cellWorldZ, inDistrict } from '../lattice/recipe.js';
 
 export class Virtualiser {
   constructor(rig, blocksG){
@@ -55,12 +56,27 @@ export class Virtualiser {
       Math.abs(r.tilt - l.tilt) > 0.03;
   }
 
+  /* A drawable for the current State.renderMode. The pool only ever holds
+     one kind at a time: resetSlots() empties it when the mode changes, so a
+     recycled object here is always of the right class. */
   takeMesh(){
     const m = this.spare.pop();
     if (m){ m.visible = true; return m; }
-    const mesh = new THREE.Mesh(this.placeholder, new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.22, metalness: 0.08
-    }));
+    let mesh;
+    switch (State.renderMode){
+      case 'wire':
+        mesh = new THREE.LineSegments(this.placeholder, new THREE.LineBasicMaterial({ vertexColors: true }));
+        break;
+      case 'points': case 'centers':
+        mesh = new THREE.Points(this.placeholder, new THREE.PointsMaterial({
+          vertexColors: true, sizeAttenuation: true, size: 0.05
+        }));
+        break;
+      default:
+        mesh = new THREE.Mesh(this.placeholder, new THREE.MeshStandardMaterial({
+          vertexColors: true, roughness: 0.22, metalness: 0.08
+        }));
+    }
     mesh.frustumCulled = true;
     this.blocksG.add(mesh);
     return mesh;
@@ -70,6 +86,53 @@ export class Virtualiser {
     s.mesh.visible = false;
     s.mesh.geometry = this.placeholder;
     this.spare.push(s.mesh);
+  }
+
+  /* The render mode changed: drop every drawable so the next layout() pass
+     takes fresh ones of the new class. Cached block data is untouched (the
+     derived views stay resident on it), so this is cheap and instant. */
+  resetSlots(){
+    for (const [, s] of this.slots) this.releaseSlot(s);
+    this.slots.clear();
+    for (const m of this.spare){ this.blocksG.remove(m); m.material.dispose(); }
+    this.spare.length = 0;
+  }
+
+  /* The geometry to draw for block `p` whose mesh-of-record is `geo` (full
+     or LOD proxy), in the current render mode. Views are derived on first
+     use and cached: wire/points hang off the mesh they index (userData) so
+     the LOD proxy gets its own; centers are a property of the voxels, so
+     one per block regardless of LOD.
+     @param {import('../types.js').BlockData} p @param {THREE.BufferGeometry} geo */
+  viewOf(p, geo){
+    const mode = State.renderMode;
+    if (mode === 'solid') return geo;
+    if (mode === 'centers'){
+      if (!p.geoCenters){
+        p.geoCenters = centersGeometry(p.occ, p.levels, p.R);
+        this._charge(p, p.geoCenters.userData.bytes);
+      }
+      return p.geoCenters;
+    }
+    const slot = mode === 'wire' ? 'wire' : 'points';
+    let view = geo.userData[slot];
+    if (!view){
+      view = geo.userData[slot] = mode === 'wire' ? wireGeometryOf(geo) : pointsGeometryOf(geo);
+      this._charge(p, view.userData.bytes);
+    }
+    return view;
+  }
+  _charge(p, bytes){ p.bytes += bytes; this.cacheBytes += bytes; }
+
+  /* Free a block's GPU-side geometry and every view derived from it. */
+  static disposeBlock(p){
+    for (const g of [p.geo, p.geoLod]){
+      if (!g) continue;
+      if (g.userData.wire) g.userData.wire.dispose();
+      if (g.userData.points) g.userData.points.dispose();
+      g.dispose();
+    }
+    if (p.geoCenters) p.geoCenters.dispose();
   }
 
   computeVisible(){
@@ -153,8 +216,7 @@ export class Virtualiser {
     cold.sort((a, b) => a[1].seen - b[1].seen);
     for (const [k, p] of cold){
       if (this.cache.size <= CFG.CACHE_MAX && this.cacheBytes <= CFG.CACHE_BYTES) break;
-      p.geo.dispose();
-      if (p.geoLod) p.geoLod.dispose();
+      Virtualiser.disposeBlock(p);
       this.cacheBytes -= p.bytes;
       this.cache.delete(k);
     }
@@ -175,8 +237,7 @@ export class Virtualiser {
     if (!p.geoLod){
       p.geoLod = blockGeometry(p.occ, 1, p.filled, p.levels, p.R);
       p.lodTris = p.geoLod.userData.tris;
-      const add = p.geoLod.userData.bytes;
-      p.bytes += add; this.cacheBytes += add;
+      this._charge(p, p.geoLod.userData.bytes);
     }
     return p.geoLod;
   }
@@ -186,10 +247,7 @@ export class Virtualiser {
   flush(){
     for (const [, s] of this.slots){ this.releaseSlot(s); }
     this.slots.clear();
-    for (const p of this.cache.values()){
-      p.geo.dispose();
-      if (p.geoLod) p.geoLod.dispose();
-    }
+    for (const p of this.cache.values()) Virtualiser.disposeBlock(p);
     this.cache.clear();
     this.cacheBytes = 0;
     this.revision++;
