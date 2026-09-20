@@ -36,6 +36,7 @@ export class Controls {
     const selArch = this.selArch = $('arch');
     const selFld  = this.selFld  = $('field');
     const selColor = $('colorMode');
+    const selRender = $('renderMode');
 
     ROLES.forEach(r => opt(selAxX, r.id, 'x axis: ' + r.label, r.id === Axis.x));
     ROLES.forEach(r => opt(selAxY, r.id, 'y axis: ' + r.label, r.id === Axis.y));
@@ -55,6 +56,12 @@ export class Controls {
     opt(selColor, 'chiral', 'color: chirality');
     opt(selColor, 'orbit', 'color: orbit index');
 
+    // Likewise display-only: the views are cut from the cached mesh on demand.
+    opt(selRender, 'solid',   'display: solid', true);
+    opt(selRender, 'wire',    'display: wireframe');
+    opt(selRender, 'points',  'display: vertices');
+    opt(selRender, 'centers', 'display: box centers');
+
     selAxX.addEventListener('change', () => this.setAxis('x', selAxX.value));
     selAxY.addEventListener('change', () => this.setAxis('y', selAxY.value));
     selSym.addEventListener('change',  () => { Filter.sym   = parseInt(selSym.value, 10);  actions.flushLattice(); });
@@ -66,6 +73,13 @@ export class Controls {
         : State.colorMode === 'orbit' ? 'orbit index (hue = which symmetric copy folded here)'
         : 'gamut position';
       setStatus('color mode: ' + label);
+    });
+    selRender.addEventListener('change', () => {
+      State.renderMode = selRender.value;
+      virtualiser.resetSlots();   // the drawable class changes with the mode
+      const label = { solid:'solid boxes', wire:'wireframe (box edges)',
+                      points:'mesh vertices', centers:'box centers (one point per voxel)' }[State.renderMode];
+      setStatus('display: ' + label);
     });
 
     /* ---- sliders ---------------------------------------------------- */

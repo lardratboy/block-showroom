@@ -86,6 +86,7 @@
  *   envelopeCells: number,
  *   geo: import('three').BufferGeometry,
  *   geoLod: import('three').BufferGeometry|null,
+ *   geoCenters: import('three').BufferGeometry|null,
  *   tris: number,
  *   lodTris?: number,
  *   aut: number,
@@ -95,7 +96,10 @@
  *   revision: number
  * }} BlockData
  * `geo` is the full mesh; `geoLod` is the outer-tier proxy, meshed lazily by
- * `Virtualiser.lodOf()`. `aut` is the automorphism order, `-1` until the
+ * `Virtualiser.lodOf()`; `geoCenters` is the voxel-centre point cloud, built
+ * lazily by `Virtualiser.viewOf()` for the 'centers' render mode (the wire and
+ * points views hang off `geo`/`geoLod` in their `userData` instead).
+ * `aut` is the automorphism order, `-1` until the
  * analyze job for the focused cell lands. `seen` is the LRU tick.
  */
 

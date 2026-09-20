@@ -729,6 +729,26 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
     timings: { mesh: meshed - started, bounds: performance.now() - meshed } };
 }
 
+/* One point per occupied voxel, at the centre of its physical cube, in the
+   same unit-box coordinates meshArrays() uses.  The showroom's "box centers"
+   display mode draws these as a point cloud; the gamut colour of a centre is
+   simply centre + 0.5, exactly as it is for mesh vertices.
+   @param {Uint8Array} occ @param {import('../types.js').Level[]} levels @param {number} R
+   @returns {{ pos: Float32Array, count: number, cellSize: number }} */
+function voxelCenters(occ, levels, R){
+  const { centers, cellSize } = tierAxisLayout(levels, false);
+  let count = 0;
+  for (let i = 0; i < occ.length; i++) if (occ[i]) count++;
+  const pos = new Float32Array(count * 3);
+  let o = 0;
+  for (let z = 0; z < R; z++) for (let y = 0; y < R; y++) for (let x = 0; x < R; x++){
+    if (!occ[x + R*y + R*R*z]) continue;
+    pos[o] = centers[x]; pos[o+1] = centers[y]; pos[o+2] = centers[z];
+    o += 3;
+  }
+  return { pos, count, cellSize };
+}
+
 // Canonicalize each mixed-radix digit triple independently. Lookup tables avoid
 // a product-group expansion and keep group operations outside the voxel loop.
 function tierFolder(P, levels, R){
@@ -883,7 +903,7 @@ function buildBlock(P, levels){
       total: performance.now() - started } };
 }
 
-return { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution, buildBlock, meshArrays, autOrder };
+return { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution, buildBlock, meshArrays, voxelCenters, autOrder };
 }
 // Main-thread instance. The worker builds its own via createBimoblockCore().
 export const Core = createBimoblockCore();

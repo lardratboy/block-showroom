@@ -18,6 +18,11 @@ const _c3 = new THREE.Color();
 const renderFrustum = new THREE.Frustum();
 const renderProjection = new THREE.Matrix4();
 
+/* A derived view (wire/points) shares its vertex buffers with the mesh it
+   was cut from, so it is on the GPU only when both its own buffers and the
+   base's are. */
+const isUploaded = g => g.userData.uploaded && (!g.userData.base || g.userData.base.userData.uploaded);
+
 /* `forceFullGeometry` (the ?fullGeometry=1 diagnostic) disables the proxy LOD. */
 export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
   const camera = rig.camera, v = virtualiser;
@@ -55,8 +60,11 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
 
     const useLod = !forceFullGeometry && px < CFG.LOD_PX;
     const lodStarted = useLod && !p.geoLod ? performance.now() : null;
-    const geo = useLod ? v.lodOf(p) : p.geo;
+    const baseGeo = useLod ? v.lodOf(p) : p.geo;
     if (lodStarted !== null) Perf.sample('main.proxyMesh', performance.now() - lodStarted);
+    // What actually gets drawn: the mesh itself in 'solid', otherwise a view
+    // derived from it (or, for 'centers', from the voxels) — see viewOf().
+    const geo = v.viewOf(p, baseGeo);
     const previousGeo = s.mesh.geometry;
     if (previousGeo !== geo) s.mesh.geometry = geo;
 
@@ -89,11 +97,11 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
     s.mesh.updateMatrixWorld(true);
     const onScreen = renderFrustum.intersectsObject(s.mesh);
     s.mesh.visible = true; s.awaitingUpload = false;
-    if (onScreen && !geo.userData.uploaded){
+    if (onScreen && !isUploaded(geo)){
       if (uploadCount && uploadBytes + geo.userData.bytes > CFG.UPLOAD_BYTES){
         s.awaitingUpload = true;
         // Preserve the old representation during a delayed LOD transition.
-        if (previousGeo.userData.uploaded) s.mesh.geometry = previousGeo;
+        if (isUploaded(previousGeo)) s.mesh.geometry = previousGeo;
         else s.mesh.visible = false;
       } else {
         uploadBytes += geo.userData.bytes; uploadCount++;
@@ -103,6 +111,10 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
 
     const mat = s.mesh.material;
     mat.opacity = k;
+    // Point size is in world units (sizeAttenuation) and ignores object
+    // scale, so track the specimen size here. Centres get a fatter dot than
+    // the (up to 3x denser) mesh-vertex cloud.
+    if (mat.isPointsMaterial) mat.size = CFG.BLOCK_S * (State.renderMode === 'centers' ? 0.075 : 0.04);
     const wantTransparent = k < 0.995;
     if (mat.transparent !== wantTransparent){ mat.transparent = wantTransparent; mat.needsUpdate = true; }
 

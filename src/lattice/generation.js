@@ -202,7 +202,7 @@ export class GenerationPool {
       if (job.type === 'build'){
         const p = { ...job.rec.P, occ:result.occ, R:result.R, levels:job.levels,
           filled:result.filled, envelopeCells:result.envelopeCells,
-          geo:geometryFromArrays(result.geometry), geoLod:null, tris:result.geometry.tris,
+          geo:geometryFromArrays(result.geometry), geoLod:null, geoCenters:null, tris:result.geometry.tris,
           aut:-1, seen:v.seenTick, kin:job.rec.kin, bytes:item.bytes, revision:job.revision };
         v.install(job.key, p); Perf.installed++;
       } else job.specimen.aut = result.aut;
