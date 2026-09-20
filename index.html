@@ -43,7 +43,14 @@
 </div>
 
 <div id="panel">
-  <div class="grp">
+  <div class="tabs" role="tablist">
+    <button class="tab" data-tab="roam"    role="tab" title="Navigation, toggles and export">roam</button>
+    <button class="tab" data-tab="lattice" role="tab" title="What the lattice enumerates and holds constant">lattice</button>
+    <button class="tab" data-tab="view"    role="tab" title="How specimens are drawn and how the camera sits">view</button>
+    <button class="tab" data-tab="keys"    role="tab" title="Mouse and keyboard shortcuts">keys</button>
+  </div>
+
+  <div class="page" data-page="roam" role="tabpanel">
     <button id="home" class="primary" title="Return to the origin cell 0,0">origin</button>
     <button id="warp" title="Jump to a random distant district of the lattice">warp</button>
     <input type="text" id="goto" placeholder="i , j" title="Type a lattice address and press enter">
@@ -55,31 +62,47 @@
     <button id="expSheet" class="primary" title="Export every visible specimen as one OBJ, laid out on the lattice">sheet obj</button>
     <button id="expObj" title="Export the focused specimen as OBJ">spec obj</button>
   </div>
-  <div class="bar"></div>
-  <div class="grp">
+
+  <div class="page" data-page="lattice" role="tabpanel">
     <select id="axX" title="What the horizontal lattice axis enumerates"></select>
     <select id="axY" title="What the vertical lattice axis enumerates"></select>
     <select id="sym"   title="Symmetry group held constant (unless an axis enumerates it)"></select>
     <select id="arch"  title="Archetype envelope held constant (unless an axis enumerates it)"></select>
     <select id="field" title="Scalar field held constant (unless an axis enumerates it)"></select>
+    <label class="slider" title="Procedural generation voxel density fill quantile"><span>density</span><input type="range" id="dens" min="6" max="70" value="25"></label>
+    <label class="slider" title="Radius of the sibling district, in cells"><span>kin</span><input type="range" id="kin" min="2" max="8" value="4"></label>
+  </div>
+
+  <div class="page" data-page="view" role="tabpanel">
     <select id="colorMode" title="How each specimen is colored"></select>
     <select id="renderMode" title="How each specimen is drawn: shaded boxes, box edges, mesh vertices, or one point per box centre"></select>
-  </div>
-  <div class="bar"></div>
-  <div class="grp">
-    <label class="slider" title="Procedural generation voxel density fill quantile"><span>density</span><input type="range" id="dens" min="6" max="70" value="25"></label>
     <label class="slider" title="Lattice pitch"><span>pitch</span><input type="range" id="pitch" min="16" max="46" value="26"></label>
     <label class="slider" title="Specimen size"><span>size</span><input type="range" id="size" min="60" max="180" value="118"></label>
     <label class="slider" title="Camera pitch, 90 is a flat contact sheet"><span>tilt</span><input type="range" id="tilt" min="30" max="88" value="52"></label>
     <label class="slider" title="Idle rotation rate"><span>spin</span><input type="range" id="spin" min="0" max="100" value="34"></label>
     <label class="slider" title="Distance haze"><span>haze</span><input type="range" id="haze" min="0" max="100" value="42"></label>
-    <label class="slider" title="Radius of the sibling district, in cells"><span>kin</span><input type="range" id="kin" min="2" max="8" value="4"></label>
     <label class="slider" title="How many specimens the horizon holds at once"><span>horizon</span><input type="range" id="horizon" min="120" max="480" step="12" value="336"></label>
   </div>
-</div>
 
-<div id="hint">drag to roam &nbsp;·&nbsp; wheel zoom &nbsp;·&nbsp; shift-drag orbit &nbsp;·&nbsp; click a cell to focus &nbsp;·&nbsp; arrows step &nbsp;·&nbsp; [ ] focus
-<br>A align &nbsp;·&nbsp; B bloom &nbsp;·&nbsp; L labels &nbsp;·&nbsp; K key &nbsp;·&nbsp; G shuffle &nbsp;·&nbsp; H origin &nbsp;·&nbsp; C copy address &nbsp;·&nbsp; O obj &nbsp;·&nbsp; E sheet</div>
+  <div class="page keys" data-page="keys" role="tabpanel">
+    <span><b>drag</b>roam</span>
+    <span><b>wheel</b>zoom</span>
+    <span><b>shift-drag</b>orbit</span>
+    <span><b>click</b>focus cell</span>
+    <span><b>arrows</b>step (shift ×5)</span>
+    <span><b>[ ]</b>focus</span>
+    <span><b>A</b>align</span>
+    <span><b>B</b>bloom</span>
+    <span><b>L</b>labels</span>
+    <span><b>K</b>key</span>
+    <span><b>G</b>shuffle</span>
+    <span><b>H</b>origin</span>
+    <span><b>W</b>warp</span>
+    <span><b>C</b>copy address</span>
+    <span><b>O</b>obj</span>
+    <span><b>E</b>sheet</span>
+  </div>
+</div>
 
 <div id="toast"></div>
 

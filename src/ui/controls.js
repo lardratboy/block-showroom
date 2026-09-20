@@ -1,4 +1,4 @@
-/* CONTROLS — the bottom panel (selects, sliders, buttons, goto box) and
+/* CONTROLS — the bottom panel (tabs of selects, sliders, buttons, goto box) and
    the global keyboard map. Binds every element in the constructor. Simple
    settings are written straight into state.js / CFG; anything that has to
    coordinate several owners (focus, pins, flushing the lattice) goes
@@ -9,6 +9,7 @@ import { Axis, Filter, Mint, Pin, State, Bloom, Focus } from '../state.js';
 import { symmetryLabel, cellWorldX, cellWorldZ } from '../lattice/recipe.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from '../export/obj.js';
 import { writeHash, commitHash, hashString } from './permalink.js';
+import { initTabs } from './tabs.js';
 
 const { GROUPS, ARCH_NAMES, FIELD_NAMES } = Core;
 
@@ -28,6 +29,8 @@ export class Controls {
     const $ = id => document.getElementById(id);
     const setStatus = text => hud.setStatus(text);
     const showToast = msg => hud.showToast(msg);
+
+    initTabs($('panel'));
 
     /* ---- selects ---------------------------------------------------- */
     const selAxX  = this.selAxX  = $('axX');
