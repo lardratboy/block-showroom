@@ -6,7 +6,7 @@
 import { Core } from '../core/bimoblock-core.js';
 import { CFG, ROLE_BY_ID, GROUP_COLORS, idiv } from '../config.js';
 import { Axis, Pin, Focus } from '../state.js';
-import { symmetryLabel } from '../lattice/recipe.js';
+import { symmetryLabel, seedHex } from '../lattice/recipe.js';
 
 const { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES } = Core;
 
@@ -63,7 +63,7 @@ export class Hud {
       `<span class="k">${p.tierSymmetry ? 'whole-grid order' : 'aut-order'}</span> <b>${p.aut < 0 ? (pool.failed('analyze', Focus.i, Focus.j) ? 'unavailable' : 'calculating…') : p.aut}</b> <span class="k">${p.tierSymmetry ? 'rigid transforms' : 'of '+g.order}</span>\n` +
       `<span class="k">voxels</span> <b>${p.filled}</b> <span class="k">/ ${p.envelopeCells}</span>\n` +
       `<span class="k">density</span> <b>${(p.density * 100).toFixed(0)}%</b>\n` +
-      `<span class="k">seed</span> <b>#${(p.seed >>> 0).toString(16).padStart(8,'0')}</b>\n` +
+      `<span class="k">seed</span> <b>#${seedHex(p.seed)}</b>\n` +
       (p.kin
         ? `<span class="k">kin</span> <b>ring ${p.kin.ring}</b> <span class="k">of ${Pin.radius} · ${p.kin.drift.length ? 'drift ' + p.kin.drift.join(' ') : 'pure inheritance'}</span>\n`
         : '') +

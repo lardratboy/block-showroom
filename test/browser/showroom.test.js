@@ -32,7 +32,7 @@ test('#0,0,15.0,0 builds the origin specimen (workers)', { skip }, async () => {
   assert.equal(r.perf.mode, 'workers');
   assert.equal(r.coord, '0, 0');
   const t = nows(r.inspector);
-  assert.match(t, /#ce6d116d/i, 'seed');
+  assert.match(t, /#75591b98ce6d116d/i, 'seed');
   assert.match(t, /63\s*\/\s*251/, 'filled / envelope voxels');
   assert.match(t, /order\s+1\s+of/i, 'aut-order');
 });
@@ -45,7 +45,7 @@ test('?workers=0 compatibility path gives the same specimen', { skip }, async ()
   assert.equal(r.perf.workers, 0);
   assert.equal(r.coord, '7, -3');
   const t = nows(r.inspector);
-  assert.match(t, /#77ad20e6/i, 'seed');
+  assert.match(t, /#5c51922677ad20e6/i, 'seed');
   assert.match(t, /49\s*\/\s*197/, 'filled / envelope voxels');
   assert.match(t, /order\s+6\s+of/i, 'aut-order');
   assert.match(t, /ring\s*0/i, 'pinned cell is ring 0 of its district');

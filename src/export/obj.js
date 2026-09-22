@@ -5,7 +5,7 @@
 import { Core } from '../core/bimoblock-core.js';
 import { CFG, ROLE_BY_ID } from '../config.js';
 import { Axis, Mint, Tier, Focus } from '../state.js';
-import { symmetryLabel, cellWorldX, cellWorldZ } from '../lattice/recipe.js';
+import { symmetryLabel, cellWorldX, cellWorldZ, seedHex } from '../lattice/recipe.js';
 
 const { ARCH_NAMES, FIELD_NAMES } = Core;
 
@@ -18,7 +18,7 @@ function download(blob, name){
 }
 
 function specimenName(p){
-  return `bimoblock_${p.tierSymmetry?'tiers_':''}${symmetryLabel(p,true).replaceAll(' / ','-')}_${ARCH_NAMES[p.arch]}_${(p.seed >>> 0).toString(16).padStart(8,'0')}`;
+  return `bimoblock_${p.tierSymmetry?'tiers_':''}${symmetryLabel(p,true).replaceAll(' / ','-')}_${ARCH_NAMES[p.arch]}_${seedHex(p.seed)}`;
 }
 
 export function exportSpecimenOBJ({ specimen, toast }){

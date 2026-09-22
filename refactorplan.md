@@ -194,7 +194,9 @@ Exit criterion: three files, identical behaviour, one commit.
 - [x] Verify: worker path (default) and main-thread path (`?workers=0`) both
       produce identical specimens at the same address (compare inspector
       `aut` and `filled`). Checked headless after Phase 3: `#0,0,15.0,0` gives
-      seed #ce6d116d, 63/251 voxels, aut 1 on both paths.
+      seed #ce6d116d, 63/251 voxels, aut 1 on both paths. (Seeds became
+      64-bit after the refactor; the same cell now reads #75591b98ce6d116d —
+      the old value is its low word — and the browser test asserts that.)
 
 Exit criterion: core tested in Node; worker is a real file; Blob code gone.
 
@@ -303,7 +305,8 @@ height sampled mid-glide, and total install/draw-call counts).
       `fetch`/`WebSocket` instead of Playwright, so it needs no install.
       Covers the workers path (`#0,0,15.0,0`) and the `?workers=0`
       compatibility path (`#7,-3,12.0,3,7.-3.4`), asserting seed, voxel
-      counts and aut-order against the Phase 2/3 reference values. ~20 s;
+      counts and aut-order against the Phase 2/3 reference values (seed
+      hex widened to 16 digits with the 64-bit seed change). ~20 s;
       skips when no Chrome is found.
 
 ---

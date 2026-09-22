@@ -8,7 +8,7 @@ const golden = JSON.parse(readFileSync(new URL('./golden.json', import.meta.url)
 const core = await loadCore();
 
 test('core exposes the expected surface', () => {
-  for (const k of ['GROUPS','ARCH_NAMES','FIELD_NAMES','NATIVE_FIELDS','LEGACY_FIELD_COUNT','LIFT_NAMES','levelResolution','buildBlock','meshArrays','voxelCenters','autOrder'])
+  for (const k of ['GROUPS','ARCH_NAMES','FIELD_NAMES','NATIVE_FIELDS','LEGACY_FIELD_COUNT','LIFT_NAMES','levelResolution','buildBlock','meshArrays','voxelCenters','autOrder','seedWords'])
     assert.ok(k in core, `missing ${k}`);
   assert.equal(core.GROUPS.length, 10);
   assert.equal(core.GROUPS[9].order, 48);
@@ -63,4 +63,19 @@ test('voxelCenters gives one centre per filled voxel, each the midpoint of a mes
       corners.add(key(c.pos[i] + sx * half, c.pos[i+1] + sy * half, c.pos[i+2] + sz * half));
   for (let i = 0; i < g.pos.length; i += 3)
     assert.ok(corners.has(key(g.pos[i], g.pos[i+1], g.pos[i+2])), 'mesh vertex is not a corner of any centred cube');
+});
+
+test('the high 32 bits of the seed change the specimen', () => {
+  // Every mode reads the seed through seedWords(), so flipping only the high
+  // word must produce a different occupancy in both a hash-driven field and
+  // a phase-driven one — otherwise the seed is effectively still 32-bit.
+  for (const base of [RECIPES[0], RECIPES[1]]){
+    const P = { ...base.P, seed: base.P.seed ^ (0x9e3779b9n << 32n) };
+    const a = core.buildBlock(base.P, LEVELS.classic);
+    const b = core.buildBlock(P, LEVELS.classic);
+    assert.notEqual(fnv(a.occ), fnv(b.occ), `${base.name}: high seed word had no effect`);
+  }
+  const w = core.seedWords(0x0123456789abcdefn);
+  assert.equal(w.lo, 0x89abcdef); assert.equal(w.hi, 0x01234567);
+  assert.equal(core.seedWords(0x89abcdef).lo, 0x89abcdef, 'a plain integer is the low word');
 });
