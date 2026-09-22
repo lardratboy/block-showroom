@@ -27,7 +27,7 @@
  * @property {number} field          Index into `Core.FIELD_NAMES` (scalar field).
  * @property {number} lift           Index into `Core.LIFT_NAMES`.
  * @property {number} density        Fraction of envelope cells kept (0.06..0.72).
- * @property {number} seed           Unsigned 32-bit hash; drives the field.
+ * @property {bigint} seed           Unsigned 64-bit hash; drives the field.
  * @property {boolean} [tierSymmetry] Each tier folds by its own `Level.sym`.
  */
 

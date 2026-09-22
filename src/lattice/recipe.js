@@ -132,6 +132,16 @@ export function hash32(a, b){
   return (h ^ (h >>> 16)) >>> 0;
 }
 
+/* Seeds are unsigned 64-bit BigInts, assembled from and split into two
+   uint32 words because everything that hashes here works in 32-bit lanes.
+   The split is Core.seedWords(); this is its inverse and the display form. */
+export function seedFromWords(lo, hi){
+  return (BigInt(hi >>> 0) << 32n) | BigInt(lo >>> 0);
+}
+export function seedHex(seed){
+  return BigInt.asUintN(64, BigInt(seed)).toString(16).padStart(16, '0');
+}
+
 /* Parameters of the specimen standing at (i,j).  Pure; no state beyond
    the axis assignment, the filters, the density and Mint.gen.
    @param {number} i @param {number} j @returns {import('../types.js').Recipe} */
@@ -153,8 +163,12 @@ export function cellParams(i, j){
   const density = got.dens != null ? 0.10 + got.dens * 0.055 : Mint.density;
 
   /* One seed per page, deliberately: within a page the family
-     resemblance across archetypes and subgroups is the whole point. */
-  const seed = hash32(h, 0x2545f491);
+     resemblance across archetypes and subgroups is the whole point.
+     The seed is 64 bits: its low word comes off the page hash above, its
+     high word off a second, independently salted hash of the same (page,
+     generation) so it carries entropy the traits did not already use. */
+  const h2 = hash32(hash32(pageY, 0x2545f491 ^ Math.imul(Mint.gen, 0x85ebca6b)), pageX * 37 + 11);
+  const seed = seedFromWords(hash32(h, 0x2545f491), hash32(h2, 0x9e3779b1));
   return { sym, arch, field:fmode, lift, density, seed };
 }
 
@@ -214,7 +228,8 @@ export function cellRecipe(i, j){
   if (dDens !== null) P.density = clamp(A.density + dDens * 0.055, 0.06, 0.72);
 
   const t01 = Pin.radius > 1 ? (ring - 1) / (Pin.radius - 1) : 1;
-  let rs = hash32(hash32(A.seed ^ Pin.epoch, di * 73856093), dj * 19349663 + ring) || 1;
+  const W = Core.seedWords(A.seed);
+  let rs = hash32(hash32(W.lo ^ Pin.epoch, W.hi ^ (di * 73856093)), dj * 19349663 + ring) || 1;
   const rnd = () => {
     rs ^= rs << 13; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0;
     return rs / 4294967296;
@@ -235,7 +250,8 @@ export function cellRecipe(i, j){
     drift.push('density');
   }
   if (rnd() < t01 * t01){
-    P.seed = hash32(A.seed, di * 7919 + dj * 104729 + ring);
+    const k = di * 7919 + dj * 104729 + ring;
+    P.seed = seedFromWords(hash32(W.lo, k), hash32(W.hi, k ^ 0x5bd1e995));
     drift.push('seed');
   }
   return { P, kin: { ring, drift } };

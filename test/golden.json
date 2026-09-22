@@ -3,27 +3,27 @@
     "R": 9,
     "filled": 63,
     "envelopeCells": 251,
-    "occ": "485c0568",
-    "pos": "cbe48395",
+    "occ": "4ae702fc",
+    "pos": "91611c05",
     "idx": "7b5e10bd",
     "aut": 1
   },
   "mech-shells": {
     "R": 9,
-    "filled": 89,
+    "filled": 91,
     "envelopeCells": 222,
-    "occ": "997aeb26",
-    "pos": "f42d007d",
-    "idx": "fc021645",
+    "occ": "4caa65cc",
+    "pos": "3eade21d",
+    "idx": "ffdafb85",
     "aut": 4
   },
   "crystal-diamond": {
     "R": 27,
-    "filled": 1064,
+    "filled": 1068,
     "envelopeCells": 5903,
-    "occ": "7dd46cf7",
-    "pos": "e6972a75",
-    "idx": "2d4f9ac5",
+    "occ": "3a84b877",
+    "pos": "d0960685",
+    "idx": "a3d68605",
     "aut": 6
   },
   "orbiter-hetero": {

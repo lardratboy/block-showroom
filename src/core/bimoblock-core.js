@@ -272,6 +272,23 @@ const PLANAR = [
 const LIFT_NAMES = ["weighted","extrude","nested"];
 const PHI = 1.6180339887498949;
 
+/* A recipe's seed is an unsigned 64-bit BigInt (a plain integer Number is
+   accepted too and treated as its low word). The field code works in 32-bit
+   lanes (Math.imul), so a seed is split once per build: `lo`/`hi` are the
+   two halves, and `mix` is a 32-bit digest of both for the consumers that
+   only ever read a few bits (sine phases, sign codes, popcount masks), so
+   every seed bit still moves every field mode. Only the per-voxel hash
+   field has enough output to tell 2^64 keys apart, and it hashes both
+   words in turn. */
+function seedWords(seed){
+  const u = BigInt.asUintN(64, BigInt(seed));
+  const lo = Number(u & 0xffffffffn) >>> 0, hi = Number(u >> 32n) >>> 0;
+  let m = Math.imul(lo ^ (lo >>> 16), 0x85ebca6b) >>> 0;
+  m = Math.imul((m ^ hi) ^ (m >>> 13), 0xc2b2ae35) >>> 0;
+  m ^= m >>> 16;
+  return { lo, hi, mix: m >>> 0 };
+}
+
 function conicParams(seed){
   let h = seed >>> 0;
   const nxt = () => {
@@ -307,7 +324,7 @@ function liftPlanar(ix, iy, iz, sx, sy, sz, baseIdx, lift, pars, R){
   return F + 0.11 * sx - 0.07 * sy + 0.19 * sz;
 }
 
-function field(sx, sy, sz, mode, effSeed, lift, pars, R){
+function field(sx, sy, sz, mode, seed, lift, pars, R){
   const half = (R - 1) / 2;
   if (mode >= NATIVE_FIELDS){
     return liftPlanar(axisToIndex(sx,R)-half, axisToIndex(sy,R)-half, axisToIndex(sz,R)-half,
@@ -315,21 +332,22 @@ function field(sx, sy, sz, mode, effSeed, lift, pars, R){
   }
   const ux = axisToIndex(sx, R), uy = axisToIndex(sy, R), uz = axisToIndex(sz, R);
   if (mode === 0){
-    let h = ((ux * 73856093) ^ (uy * 19349663) ^ (uz * 83492791) ^ Math.imul(effSeed, 0x9e3779b9)) >>> 0;
+    let h = ((ux * 73856093) ^ (uy * 19349663) ^ (uz * 83492791) ^ Math.imul(seed.lo, 0x9e3779b9)) >>> 0;
     h ^= h >>> 13; h = Math.imul(h, 0x85ebca6b) >>> 0; h ^= h >>> 16;
+    h = Math.imul(h ^ seed.hi, 0xc2b2ae35) >>> 0; h ^= h >>> 15;
     return (h & 0xffff) / 65535;
   }
   if (mode === 1){
     const r = Math.sqrt(1.00*sx*sx + 1.37*sy*sy + 0.71*sz*sz);
     const tilt = 0.55*sx - 0.31*sy + 0.83*sz;
-    return 0.5 + 0.5 * Math.sin(r * 9.4248 + tilt * 4.1 + (effSeed & 0xff) * 0.1);
+    return 0.5 + 0.5 * Math.sin(r * 9.4248 + tilt * 4.1 + (seed.mix & 0xff) * 0.1);
   }
   if (mode === 2){
     const m = Math.abs(sx) * 1.00 + Math.abs(sy) * 1.31 + Math.abs(sz) * 0.73;
     const tilt = 0.47*sx + 0.91*sy - 0.29*sz;
-    return 0.5 + 0.5 * Math.sin(m * 8.0 + tilt * 3.3 + (effSeed & 0xff) * 0.15);
+    return 0.5 + 0.5 * Math.sin(m * 8.0 + tilt * 3.3 + (seed.mix & 0xff) * 0.15);
   }
-  let q = ((ux * 11) ^ (uy * 7 + uz * 23) ^ (uz * ux * 5) ^ (ux * uy * 3) ^ (effSeed & 0xffff)) >>> 0;
+  let q = ((ux * 11) ^ (uy * 7 + uz * 23) ^ (uz * ux * 5) ^ (ux * uy * 3) ^ (seed.mix & 0xffff)) >>> 0;
   q = q - ((q >>> 1) & 0x55555555);
   q = (q & 0x33333333) + ((q >>> 2) & 0x33333333);
   const cnt = Math.imul((q + (q >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
@@ -383,9 +401,10 @@ function tierDigits(sx, sy, sz, levels, R){
    then checked byte-for-byte against the golden reference again after
    editing, the same way the original port was verified.
    ===================================================================== */
-function tierField(sx, sy, sz, mode, effSeed, levels, R){
+function tierField(sx, sy, sz, mode, seed, levels, R){
   const T = tierDigits(sx,sy,sz,levels,R), A=T.a, B=T.b, L=T.L;
-  const seedPhase = ((effSeed >>> 0) & 255) / 255;
+  const effSeed = seed.mix;
+  const seedPhase = (effSeed & 255) / 255;
 
   if (mode === 0){
     // Exchange significance across the WHOLE stack: reverse both the digit order
@@ -793,7 +812,8 @@ function buildBlock(P, levels){
   const R = levelResolution(levels);
   const foldTier = P.tierSymmetry ? tierFolder(P, levels, R) : null;
   const orbitOrder = foldTier ? foldTier.outerOrder : G.order;
-  const pars = { conic: conicParams(P.seed), scale: [] };
+  const S = seedWords(P.seed);
+  const pars = { conic: conicParams(S.mix), scale: [] };
   if (fmode >= NATIVE_FIELDS && fmode < LEGACY_FIELD_COUNT)
     pars.scale[fmode - NATIVE_FIELDS] = planarScale(PLANAR[fmode - NATIVE_FIELDS], pars.conic, R);
 
@@ -806,8 +826,8 @@ function buildBlock(P, levels){
   let nVals = 0;
   const orbit = new Uint8Array(R*R*R); // winning fold-element index per cell (only meaningful where occ ends up 1)
   const evalOne = (s0, s1, s2) => fmode < LEGACY_FIELD_COUNT
-    ? field(s0, s1, s2, fmode, P.seed, P.lift, pars, R)
-    : tierField(s0, s1, s2, fmode - LEGACY_FIELD_COUNT, P.seed, levels, R);
+    ? field(s0, s1, s2, fmode, S, P.lift, pars, R)
+    : tierField(s0, s1, s2, fmode - LEGACY_FIELD_COUNT, S, levels, R);
 
   if (foldTier){
     // tierFolder already works from per-level lookup tables, so the per-cell
@@ -903,7 +923,7 @@ function buildBlock(P, levels){
       total: performance.now() - started } };
 }
 
-return { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution, buildBlock, meshArrays, voxelCenters, autOrder };
+return { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution, buildBlock, meshArrays, voxelCenters, autOrder, seedWords };
 }
 // Main-thread instance. The worker builds its own via createBimoblockCore().
 export const Core = createBimoblockCore();
