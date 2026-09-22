@@ -50,7 +50,7 @@ export const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
    CFG.POD_MAX specimens live at once, so the safe ceiling here is much
    lower. It covers every shipped preset (tower3=27, tower4=16, hetero=24)
    with headroom. */
-export const MAX_R = 32;
+export const MAX_R = 64;
 
 export const PRESETS = {
   classic: [{radix:3,gap:0.30},{radix:3,gap:0.06}],
