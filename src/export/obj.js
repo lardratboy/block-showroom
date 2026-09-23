@@ -1,10 +1,17 @@
 /* Wavefront OBJ exporters. Both take their live collaborators as a
    parameter object rather than reaching into main.js: `specimen` is the
    focused block's cached data, `rig`/`visible`/`cache` the camera target and
-   the on-screen set, `toast` the HUD notifier. */
+   the on-screen set, `toast` the HUD notifier.
+
+   OBJ wants independent triangles, which a resident specimen no longer
+   carries: it holds the instance record, and the renderer expands cubes on
+   the GPU. So these expand it back here, one specimen at a time and only
+   when the viewer asks — Core.expandInstances() is the same emit the baked
+   mesher used, so the file written is byte-for-byte the file this exported
+   before instancing. */
 import { Core } from '../core/bimoblock-core.js';
 import { CFG, ROLE_BY_ID } from '../config.js';
-import { Axis, Mint, Tier, Focus } from '../state.js';
+import { Axis, Mint, Tier, Focus, State } from '../state.js';
 import { symmetryLabel, cellWorldX, cellWorldZ, seedHex } from '../lattice/recipe.js';
 
 const { ARCH_NAMES, FIELD_NAMES } = Core;
@@ -35,21 +42,24 @@ export function exportSpecimenOBJ({ specimen, toast }){
     `# format: v X Y Z R G B (normalized local gamut colors), vn NX NY NZ, f v1//vn1 v2//vn2 v3//vn3`,
     ""
   ];
-  const pos = p.geo.getAttribute('position');
-  const col = p.geo.getAttribute('color');
-  const nrm = p.geo.getAttribute('normal');
+  const mesh = Core.expandInstances(p.inst);
+  const pos = mesh.pos, nrm = mesh.nrm;
+  // Whichever colouring is on screen, as before: the exporter took the
+  // attribute the material was reading, not the gamut one by name.
+  const col = (State.colorMode === 'orbit' && mesh.colOrbit) ? mesh.colOrbit : mesh.col;
+  const verts = pos.length / 3;
   let vi = 1;
-  for (let k = 0; k < pos.count; k += 4){
+  for (let k = 0; k < verts; k += 4){
     for (let q = 0; q < 4; q++){
-      const n = k + q;
-      lines.push(`v ${pos.getX(n).toFixed(4)} ${pos.getY(n).toFixed(4)} ${pos.getZ(n).toFixed(4)} ` +
-                 `${col.getX(n).toFixed(4)} ${col.getY(n).toFixed(4)} ${col.getZ(n).toFixed(4)}`);
-      lines.push(`vn ${nrm.getX(n).toFixed(4)} ${nrm.getY(n).toFixed(4)} ${nrm.getZ(n).toFixed(4)}`);
+      const o = (k + q) * 3;
+      lines.push(`v ${pos[o].toFixed(4)} ${pos[o+1].toFixed(4)} ${pos[o+2].toFixed(4)} ` +
+                 `${col[o].toFixed(4)} ${col[o+1].toFixed(4)} ${col[o+2].toFixed(4)}`);
+      lines.push(`vn ${nrm[o].toFixed(4)} ${nrm[o+1].toFixed(4)} ${nrm[o+2].toFixed(4)}`);
     }
     lines.push(`f ${vi}//${vi} ${vi+1}//${vi+1} ${vi+2}//${vi+2} ${vi+3}//${vi+3}`);
     vi += 4;
   }
-  const quads = pos.count / 4;
+  const quads = verts / 4;
   download(new Blob([lines.join("\n")], { type:'text/plain' }), specimenName(p) + '.obj');
   toast(`${specimenName(p)}.obj exported (${quads} quads)`);
 }
@@ -73,27 +83,29 @@ export function exportSheetOBJ({ rig, visible, cache, toast }){
   for (const c of visible){
     const p = cache.get(c.key);
     if (!p) continue;
-    const geo = p.geo;
-    const posAttr = geo.getAttribute('position');
-    const colAttr = geo.getAttribute('color');
-    const nrmAttr = geo.getAttribute('normal');
-    const idxAttr = geo.getIndex();
-    if (!posAttr || posAttr.count === 0) continue;
+    // Expanded per specimen and dropped again, so the sheet never holds more
+    // than one baked mesh at a time however many cells are standing.
+    const mesh = Core.expandInstances(p.inst);
+    const pos = mesh.pos, nrm = mesh.nrm, idx = mesh.idx;
+    const col = (State.colorMode === 'orbit' && mesh.colOrbit) ? mesh.colOrbit : mesh.col;
+    const verts = pos.length / 3;
+    if (!verts) continue;
 
     const ox = cellWorldX(c.i), oz = cellWorldZ(c.j), oy = S * 0.5 + 0.42;
     lines.push(`# symmetry mode: ${p.tierSymmetry ? 'independent address tiers' : 'coupled whole-grid'}; groups: ${symmetryLabel(p)}; radices: ${p.levels.map(l=>l.radix).join(',')}`);
     lines.push(`o cell_${c.i}_${c.j}_${symmetryLabel(p,true).replaceAll(' / ','-')}_${ARCH_NAMES[p.arch]}`);
-    for (let k = 0; k < posAttr.count; k++){
-      lines.push(`v ${(posAttr.getX(k)*S+ox).toFixed(4)} ${(posAttr.getY(k)*S+oy).toFixed(4)} ${(posAttr.getZ(k)*S+oz).toFixed(4)} ` +
-                 `${colAttr.getX(k).toFixed(4)} ${colAttr.getY(k).toFixed(4)} ${colAttr.getZ(k).toFixed(4)}`);
-      lines.push(`vn ${nrmAttr.getX(k).toFixed(4)} ${nrmAttr.getY(k).toFixed(4)} ${nrmAttr.getZ(k).toFixed(4)}`);
+    for (let k = 0; k < verts; k++){
+      const o = k * 3;
+      lines.push(`v ${(pos[o]*S+ox).toFixed(4)} ${(pos[o+1]*S+oy).toFixed(4)} ${(pos[o+2]*S+oz).toFixed(4)} ` +
+                 `${col[o].toFixed(4)} ${col[o+1].toFixed(4)} ${col[o+2].toFixed(4)}`);
+      lines.push(`vn ${nrm[o].toFixed(4)} ${nrm[o+1].toFixed(4)} ${nrm[o+2].toFixed(4)}`);
     }
-    for (let k = 0; k < idxAttr.count; k += 3){
-      const a = idxAttr.getX(k) + vCount, b = idxAttr.getX(k+1) + vCount, d = idxAttr.getX(k+2) + vCount;
+    for (let k = 0; k < idx.length; k += 3){
+      const a = idx[k] + vCount, b = idx[k+1] + vCount, d = idx[k+2] + vCount;
       lines.push(`f ${a}//${a} ${b}//${b} ${d}//${d}`);
     }
-    tris += idxAttr.count / 3;
-    vCount += posAttr.count;
+    tris += idx.length / 3;
+    vCount += verts;
     blocks++;
   }
 

@@ -9,9 +9,10 @@ const golden = {};
 for (const r of RECIPES){
   const levels = LEVELS[r.levels];
   const b = core.buildBlock(r.P, levels);
+  const mesh = core.expandInstances(b.instances);
   golden[r.name] = {
     R: b.R, filled: b.filled, envelopeCells: b.envelopeCells,
-    occ: fnv(b.occ), pos: fnv(b.geometry.pos), idx: fnv(b.geometry.idx),
+    occ: fnv(b.occ), pos: fnv(mesh.pos), idx: fnv(mesh.idx),
     aut: core.autOrder(b.occ, b.R),
   };
 }

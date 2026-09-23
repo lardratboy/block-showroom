@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { CFG, ROLE_BY_ID, GROUP_RGB, TAU } from '../config.js';
 import { Axis, Pin, State, Focus, Hover } from '../state.js';
 import { specimenChiral, cellWorldX, cellWorldZ, hash32 } from '../lattice/recipe.js';
+import { setInstancingUniforms } from './instancing.js';
 import { Perf } from '../perf.js';
 
 const _m4 = new THREE.Matrix4();
@@ -18,10 +19,11 @@ const _c3 = new THREE.Color();
 const renderFrustum = new THREE.Frustum();
 const renderProjection = new THREE.Matrix4();
 
-/* A derived view (wire/points) shares its vertex buffers with the mesh it
-   was cut from, so it is on the GPU only when both its own buffers and the
-   base's are. */
-const isUploaded = g => g.userData.uploaded && (!g.userData.base || g.userData.base.userData.uploaded);
+/* Every render mode of a specimen indexes one set of instance attributes, so
+   residency is a property of that bundle rather than of the drawable. The
+   placeholder geometry owns nothing and is never uploaded, which is what
+   keeps a slot hidden until its specimen has actually reached the GPU. */
+const isUploaded = g => { const o = g.userData && g.userData.owner; return !!o && o.uploaded; };
 
 /* `forceFullGeometry` (the ?fullGeometry=1 diagnostic) disables the proxy LOD. */
 export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
@@ -58,26 +60,15 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
     const dist = Math.hypot(camera.position.x - wx, camera.position.y, camera.position.z - wz);
     const px = CFG.BLOCK_S * projK / Math.max(dist, 0.001);
 
-    const useLod = !forceFullGeometry && px < CFG.LOD_PX;
-    const lodStarted = useLod && !p.geoLod ? performance.now() : null;
-    const baseGeo = useLod ? v.lodOf(p) : p.geo;
-    if (lodStarted !== null) Perf.sample('main.proxyMesh', performance.now() - lodStarted);
-    // What actually gets drawn: the mesh itself in 'solid', otherwise a view
-    // derived from it (or, for 'centers', from the voxels) — see viewOf().
-    const geo = v.viewOf(p, baseGeo);
+    // What actually gets drawn: the instance bundle of record, indexed for the
+    // current render mode. viewOf() decides whether the proxy is the right
+    // bundle at all and builds it only if it is — see viewOf().
+    const wantLod = !forceFullGeometry && px < CFG.LOD_PX;
+    const lodStarted = wantLod && !p.viewsLod ? performance.now() : null;
+    const geo = v.viewOf(p, wantLod);
+    if (lodStarted !== null && p.viewsLod) Perf.sample('main.proxyMesh', performance.now() - lodStarted);
     const previousGeo = s.mesh.geometry;
     if (previousGeo !== geo) s.mesh.geometry = geo;
-
-    // Orbit-index coloring lives on a second attribute (colorOrbit) rather than
-    // overwriting colorGamut, so this only swaps which one the material reads
-    // as 'color' — cheap, and a no-op once every visible geometry has caught up
-    // to the current mode. Geometries without colorOrbit (LOD proxies, or any
-    // specimen generated before this mode existed) simply stay on gamut.
-    const wantAttr = (State.colorMode === 'orbit' && geo.attributes.colorOrbit) ? 'orbit' : 'gamut';
-    if (geo.userData.colorBound !== wantAttr){
-      geo.setAttribute('color', wantAttr === 'orbit' ? geo.attributes.colorOrbit : geo.attributes.colorGamut);
-      geo.userData.colorBound = wantAttr;
-    }
 
     const k = s.age * s.age * (3 - 2 * s.age);
     const bob = 0.10 * Math.sin(t * 0.7 + c.i * 0.9 - c.j * 0.6);
@@ -98,18 +89,24 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
     const onScreen = renderFrustum.intersectsObject(s.mesh);
     s.mesh.visible = true; s.awaitingUpload = false;
     if (onScreen && !isUploaded(geo)){
-      if (uploadCount && uploadBytes + geo.userData.bytes > CFG.UPLOAD_BYTES){
+      const bytes = geo.userData.owner.uploadBytes;
+      if (uploadCount && uploadBytes + bytes > CFG.UPLOAD_BYTES){
         s.awaitingUpload = true;
         // Preserve the old representation during a delayed LOD transition.
         if (isUploaded(previousGeo)) s.mesh.geometry = previousGeo;
         else s.mesh.visible = false;
       } else {
-        uploadBytes += geo.userData.bytes; uploadCount++;
+        uploadBytes += bytes; uploadCount++;
       }
     }
     if (onScreen && s.mesh.visible) frameTris += s.mesh.geometry.userData.tris || 0;
 
     const mat = s.mesh.material;
+    // Where this specimen's cubes are and how wide they are, plus which of the
+    // two colourings the vertex shader should hand out. Orbit colour is a
+    // per-voxel byte expanded in the shader; a geometry carrying none (the LOD
+    // proxy, whose cells aggregate voxels of different orbits) stays on gamut.
+    setInstancingUniforms(mat, geo, State.colorMode === 'orbit');
     mat.opacity = k;
     // Point size is in world units (sizeAttenuation) and ignores object
     // scale, so track the specimen size here. Centres get a fatter dot than
@@ -118,10 +115,10 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
     const wantTransparent = k < 0.995;
     if (mat.transparent !== wantTransparent){ mat.transparent = wantTransparent; mat.needsUpdate = true; }
 
-    // Additive tint, not a replacement: material.color multiplies the baked-in
-    // gamut vertex colors, so 'gamut' mode (white, i.e. ×1) leaves them exactly
-    // as before, and 'chiral' mode shifts the whole specimen toward one of two
-    // accents without touching the underlying geometry or its color attribute.
+    // Additive tint, not a replacement: material.color multiplies the per-vertex
+    // colour the instancing shader hands out, so 'gamut' mode (white, i.e. ×1)
+    // leaves it exactly as it was, and 'chiral' mode shifts the whole specimen
+    // toward one of two accents without touching the geometry or the shader.
     if (State.colorMode === 'chiral'){
       const chiral = specimenChiral(p);
       mat.color.setRGB(chiral ? 1.00 : 0.62, chiral ? 0.82 : 0.72, chiral ? 0.42 : 0.88);
