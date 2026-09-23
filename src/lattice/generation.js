@@ -10,7 +10,8 @@ import { Core } from '../core/bimoblock-core.js';
 import { runNumericJob } from '../core/jobs.js';
 import { CFG } from '../config.js';
 import { Tier, Pin, Focus } from '../state.js';
-import { geometryFromArrays, cellWorldX, cellWorldZ, cellRecipe } from './recipe.js';
+import { cellWorldX, cellWorldZ, cellRecipe } from './recipe.js';
+import { InstancedSpecimen } from '../scene/instancing.js';
 import { Perf } from '../perf.js';
 
 const { levelResolution } = Core;
@@ -83,7 +84,7 @@ export class GenerationPool {
       this.pending.delete(job.token); Perf.discarded++; return;
     }
     const result = message.result;
-    const bytes = job.type === 'build' ? result.geometry.bytes + result.occ.byteLength : 0;
+    const bytes = job.type === 'build' ? result.instances.bytes + result.occ.byteLength : 0;
     this.results.push({ job, result, bytes });
     const source = slot.worker ? 'worker.' : 'compatibility.';
     if (result.timings) for (const [name,ms] of Object.entries(result.timings)) Perf.sample(source+name, ms);
@@ -170,9 +171,9 @@ export class GenerationPool {
       const rec = cellRecipe(c.i,c.j), levels = Tier.levels.map(l => ({...l})), R = levelResolution(levels);
       rec.P.tierSymmetry = Tier.symmetry;
       return { type:'build', i:c.i, j:c.j, key, token, rec, levels,
-        // Six independent quads per cell, 32-bit indices, occupancy, plus the
-        // colOrbit buffer alongside the existing gamut one: conservative reservation.
-        estimate:R*R*R*(6*216+1), payload:{recipe:rec.P, levels} };
+        // Worst case every cell is occupied: a flat index, a face mask and an
+        // orbit byte each, plus the occupancy grid and the axis centre table.
+        estimate:R*R*R*7 + R*8 + 256, payload:{recipe:rec.P, levels} };
     };
     for (const c of priority){ const job = makeBuild(c); if (job) return job; }
     if (this.dispatches % 4 === 3){ const job = analyze(); if (job) return job; }
@@ -200,10 +201,13 @@ export class GenerationPool {
       if (accepted && (performance.now()-started >= CFG.INSTALL_MS || admittedBytes+item.bytes > CFG.UPLOAD_BYTES)) break;
       this.results.shift(); this.pending.delete(job.token); this.failures.delete(job.token);
       if (job.type === 'build'){
+        const views = new InstancedSpecimen(result.instances);
         const p = { ...job.rec.P, occ:result.occ, R:result.R, levels:job.levels,
           filled:result.filled, envelopeCells:result.envelopeCells,
-          geo:geometryFromArrays(result.geometry), geoLod:null, geoCenters:null, tris:result.geometry.tris,
-          aut:-1, seen:v.seenTick, kin:job.rec.kin, bytes:item.bytes, revision:job.revision };
+          inst:result.instances, views, instLod:null, viewsLod:null,
+          tris:result.instances.count * 12,
+          aut:-1, seen:v.seenTick, kin:job.rec.kin,
+          bytes:item.bytes + views.bytes, revision:job.revision };
         v.install(job.key, p); Perf.installed++;
       } else job.specimen.aut = result.aut;
       accepted++; admittedBytes += item.bytes;

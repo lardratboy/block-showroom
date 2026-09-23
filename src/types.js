@@ -48,8 +48,10 @@
  */
 
 /**
- * Transferable mesh buffers from `Core.meshArrays()`. Converted to a
- * `THREE.BufferGeometry` by `geometryFromArrays()` on the main thread.
+ * Baked, independent-quad mesh buffers from `Core.expandInstances()` (and
+ * `Core.meshArrays()`, which is that applied to a fresh record). Nothing on
+ * the render path builds these any more: the OBJ exporters expand a record
+ * on demand, and the golden hashes are defined on the result.
  * @typedef {Object} MeshArrays
  * @property {Float32Array} pos             xyz per vertex.
  * @property {Float32Array} col             rgb per vertex, the gamut colouring.
@@ -62,8 +64,28 @@
  * @property {number} bytes                 Total byte length of every buffer.
  * @property {{mesh:number, bounds:number}} timings  Milliseconds. `bounds`
  *   is kept for the perf-sample key but is always 0: the bounding sphere is
- *   now derived from the occupied extent and accumulated during the emit,
- *   so there is no separate pass to time.
+ *   derived from the occupied extent and the face masks, so there is no
+ *   separate pass to time.
+ */
+
+/**
+ * What a build actually ships, and what the cache holds: the occupancy walk's
+ * own output, which every drawn and exported form is a function of. Transfers
+ * out of a worker as four buffers — see `Core.instanceArrays()`.
+ * @typedef {Object} InstanceArrays
+ * @property {Uint32Array} cells        Flat grid index per occupied cell, walk order.
+ * @property {Uint8Array} masks         Six-bit surviving-face set per cell.
+ * @property {Uint8Array|null} orbitIdx Fold-element index per cell; full resolution only.
+ * @property {number} orbitOrder        Orbit count for the hue ramp, 0 when uncoloured.
+ * @property {number} count             Occupied cells, i.e. instances.
+ * @property {number} N                 Grid resolution this record indexes (`R`, or `r0` for the proxy).
+ * @property {Float64Array} centers     Axis centre table, shared by all three axes.
+ * @property {number} cellSize          Physical cube width in unit-box coordinates.
+ * @property {number} quads             Surviving faces, i.e. `sum(popcount(masks))`.
+ * @property {number} tris              Always `quads * 2`; what survives masking, not what is submitted.
+ * @property {{center:number[], radius:number}} bounds  Bounding sphere.
+ * @property {number} bytes             Total byte length of every buffer.
+ * @property {{mesh:number, bounds:number}} timings  Milliseconds.
  */
 
 /**
@@ -73,7 +95,7 @@
  * @property {number} R              `levelResolution(levels)`.
  * @property {number} filled         Count of set cells in `occ`.
  * @property {number} envelopeCells  Cells inside the archetype envelope.
- * @property {MeshArrays} geometry
+ * @property {InstanceArrays} instances
  * @property {{evaluate:number, select:number, mesh:number, bounds:number, total:number}} timings
  */
 
@@ -87,9 +109,10 @@
  *   levels: Level[],
  *   filled: number,
  *   envelopeCells: number,
- *   geo: import('three').BufferGeometry,
- *   geoLod: import('three').BufferGeometry|null,
- *   geoCenters: import('three').BufferGeometry|null,
+ *   inst: InstanceArrays,
+ *   views: import('./scene/instancing.js').InstancedSpecimen,
+ *   instLod: InstanceArrays|null,
+ *   viewsLod: import('./scene/instancing.js').InstancedSpecimen|null,
  *   tris: number,
  *   lodTris?: number,
  *   aut: number,
@@ -98,10 +121,11 @@
  *   bytes: number,
  *   revision: number
  * }} BlockData
- * `geo` is the full mesh; `geoLod` is the outer-tier proxy, meshed lazily by
- * `Virtualiser.lodOf()`; `geoCenters` is the voxel-centre point cloud, built
- * lazily by `Virtualiser.viewOf()` for the 'centers' render mode (the wire and
- * points views hang off `geo`/`geoLod` in their `userData` instead).
+ * `inst` is the full-resolution instance record and `views` its GPU-side
+ * attributes; `instLod`/`viewsLod` are the outer-tier proxy, built lazily by
+ * `Virtualiser.lodOf()`. All four render modes index one of those two bundles
+ * (see `InstancedSpecimen.geometryFor`), so a mode costs no GPU memory of its
+ * own. `tris` is the submitted triangle count, cubes whole.
  * `aut` is the automorphism order, `-1` until the
  * analyze job for the focused cell lands. `seen` is the LRU tick.
  */

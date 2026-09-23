@@ -8,7 +8,7 @@ const golden = JSON.parse(readFileSync(new URL('./golden.json', import.meta.url)
 const core = await loadCore();
 
 test('core exposes the expected surface', () => {
-  for (const k of ['GROUPS','ARCH_NAMES','FIELD_NAMES','NATIVE_FIELDS','LEGACY_FIELD_COUNT','LIFT_NAMES','levelResolution','buildBlock','meshArrays','voxelCenters','autOrder','seedWords'])
+  for (const k of ['GROUPS','ARCH_NAMES','FIELD_NAMES','NATIVE_FIELDS','LEGACY_FIELD_COUNT','LIFT_NAMES','levelResolution','buildBlock','instanceArrays','expandInstances','meshArrays','voxelCenters','autOrder','seedWords'])
     assert.ok(k in core, `missing ${k}`);
   assert.equal(core.GROUPS.length, 10);
   assert.equal(core.GROUPS[9].order, 48);
@@ -24,8 +24,11 @@ for (const r of RECIPES){
     assert.equal(b.filled, g.filled);
     assert.equal(b.envelopeCells, g.envelopeCells);
     assert.equal(fnv(b.occ), g.occ, 'voxel occupancy changed');
-    assert.equal(fnv(b.geometry.pos), g.pos, 'mesh positions changed');
-    assert.equal(fnv(b.geometry.idx), g.idx, 'mesh indices changed');
+    // A build ships an instance record now; the baked mesh the hashes are
+    // defined on is that record expanded, so these still pin the geometry.
+    const mesh = core.expandInstances(b.instances);
+    assert.equal(fnv(mesh.pos), g.pos, 'mesh positions changed');
+    assert.equal(fnv(mesh.idx), g.idx, 'mesh indices changed');
     assert.equal(core.autOrder(b.occ, b.R), g.aut);
   });
 }
@@ -38,7 +41,7 @@ test('buildBlock is deterministic across calls', () => {
 
 test('mesh arrays are internally consistent', () => {
   const b = core.buildBlock(RECIPES[2].P, LEVELS.tower3);
-  const g = b.geometry;
+  const g = core.expandInstances(b.instances);
   assert.equal(g.pos.length % 3, 0);
   assert.equal(g.pos.length, g.nrm.length);
   assert.equal(g.pos.length, g.col.length);
@@ -55,7 +58,7 @@ test('voxelCenters gives one centre per filled voxel, each the midpoint of a mes
   for (const v of c.pos) assert.ok(v > -0.5 && v < 0.5, `centre ${v} outside the unit box`);
   // Every mesh vertex sits half a cell from some centre on every axis, so
   // each corner of each exposed face must be centre ± cellSize/2.
-  const half = c.cellSize / 2, g = b.geometry;
+  const half = c.cellSize / 2, g = core.expandInstances(b.instances);
   const key = (x, y, z) => `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
   const corners = new Set();
   for (let i = 0; i < c.pos.length; i += 3)

@@ -301,3 +301,177 @@ rather than after, because "draw fewer instances" only beats the 3³ proxy if
 the proxy is actually earning its keep today. §3C still stands unchanged:
 at R=64, 40 MB/specimen exhausts `CACHE_BYTES` after six specimens, so B is
 the enabling move for the ceiling you just raised, not a nice-to-have.
+
+---
+
+## 7. Option B — what instancing cost and what it bought
+
+Branch `feature/center-instancing`. `npm test` (19 tests) and
+`npm run test:browser` both green, goldens untouched.
+
+### 7.1 The record is the specimen
+
+The occupancy walk already computed everything a specimen is; the old mesher
+then spent most of its time turning that into vertices. So the walk's own
+output is now what a build returns and what the cache holds:
+
+```
+cells     Uint32 flat grid index per occupied cell, in walk order
+masks     Uint8  the six-bit surviving-face set for that cell
+orbitIdx  Uint8  fold-element index, full resolution only
+centers   Float64 axis centre table (R entries, shared by all three axes)
+```
+
+Six bytes a voxel, plus a table the size of one axis. `meshArrays()` still
+exists and still returns exactly what it always did — it is now
+`expandInstances(instanceArrays(...))`, so the culling logic has one
+implementation and the golden hashes verify the instance path rather than a
+parallel one. Every `pos`/`idx` hash in `golden.json` is unchanged.
+
+`centers` stays double precision on purpose. A centre rounded to f32 and then
+offset by half a cell lands up to one f32 ulp from the same vertex computed in
+double and rounded once, so an f32 record would have moved every vertex and
+invalidated the goldens for no visible gain. The GPU gets f32 centres; the
+CPU keeps the exact table. That divergence is bounded by a test
+(`test/instancing.test.js`) rather than assumed: worst case under 1e-7 of the
+unit box, which cannot move an 8-bit colour channel by half a step.
+
+### 7.2 Four render modes, one buffer
+
+The four modes are four indexings of the same instance attributes, not four
+copies of them:
+
+| mode | template | index |
+|---|---|---|
+| solid | 24-vertex cube | 36, two triangles a face |
+| wire | the same 24 | 48, four edges a face |
+| points | the same 24 | none |
+| centers | one vertex at the cube centre | none |
+
+So `wireGeometryOf`, `pointsGeometryOf`, `centersGeometry` and the byte
+accounting each carried are gone, and switching modes now allocates a small
+geometry object and nothing on the GPU. `recipe.js` no longer imports THREE
+at all — it went back to being purely address → recipe.
+
+Occlusion survives intact. Each template corner carries its face's bit; a
+corner whose bit is clear is sent outside the clip volume, which discards its
+triangles, its edges and its points alike. That matters because the fade-in is
+transparent — simply drawing the hidden faces would have shown the inside of
+every specimen as it rose.
+
+Gamut colour is `position + 0.5` computed in the vertex shader, so the
+`colorGamut` attribute stopped existing, exactly as §3B predicted. Orbit
+colour is one byte per voxel expanded through the same hue ramp
+`orbitColor()` uses; `colorOrbit`, 12 floats a quad, is gone too. Chiral is
+still the material tint and was never touched.
+
+### 7.3 Measured
+
+Node, best-of-N, each case in its own process, against the pre-branch core.
+Recipe `{sym:3, arch:1, field:1, lift:1, density:0.40}`, seed `0x1234abcd85ebca6b`.
+
+| layout | R | filled | quads/voxel | mesh old → new | build old → new | per specimen old → new |
+|---|---|---|---|---|---|---|
+| `n5` | 5 | 9 | 6.000 | 0.035 → 0.009 | 0.089 → 0.060 | 11.0 KB → 220 B |
+| `classic` | 9 | 91 | 6.000 | 0.020 → 0.005 | 0.052 → 0.035 | 111 KB → 1.9 KB |
+| `n4` | 16 | 504 | 6.000 | 0.097 → 0.024 | 0.218 → 0.124 | 617 KB → 10.2 KB |
+| `tower3` | 27 | 2 475 | 6.000 | 0.507 → 0.111 | 1.119 → 0.640 | 3.03 MB → 49.7 KB |
+| 4·4·4 | 64 | 32 412 | 6.000 | 6.285 → **1.403** | 15.76 → **8.66** | 42.0 MB → **649 KB** |
+| 4·4·4 inner 0 | 64 | 32 412 | 1.799 | 3.000 → 1.572 | 11.53 → 8.60 | 12.6 MB → 649 KB |
+| `3:0.5,5:0.0` | 15 | 336 | 2.958 | 0.048 → 0.019 | 0.149 → 0.117 | 203 KB → 6.8 KB |
+
+Geometry **1.9–4.6×**, whole build **1.3–1.8×**, memory **19–65×**. The worker
+message at R=64 goes from 42.3 MB to 457 KB — **92×** — which is the number
+that matters for a pool of them.
+
+In the browser, `#0,0,15.0,0` on the default preset, 294 specimens resident:
+
+| | main | branch |
+|---|---|---|
+| `residentBytes` | 27 768 486 | 662 688 (**41.9×**) |
+| `maxUploadBytes` | 1 706 256 | 19 516 (**87×**) |
+| `worker.mesh` mean | 0.099 ms | 0.013 ms (**7.7×**) |
+| `worker.total` mean | 0.255 ms | 0.166 ms (1.5×) |
+| triangles submitted | 26 002 | 26 002 |
+| draw calls | 136 | 134 |
+
+### 7.4 §3C is answered
+
+`CACHE_BYTES` is 256 MB and `CACHE_MAX` is 760. At R=64 baked geometry
+exhausted the byte budget after **six** specimens. At 649 KB it does so after
+about **394**, so the 64-radix ceiling and the cache are no longer in conflict
+at any resolution the lattice actually reaches. Nothing in `config.js` was
+changed to get there.
+
+### 7.5 The one thing that got worse, with numbers
+
+Instancing submits the whole cube and discards hidden faces in the vertex
+shader, so where the mesher used to cull, the GPU now pays for the culled
+faces in vertex work:
+
+| layout | baked triangles | instanced | ratio |
+|---|---|---|---|
+| every shipped preset | `filled`×12 | `filled`×12 | **1.00** |
+| `3:0.5,5:0.0` | 1 988 | 4 032 | 2.03 |
+| 4·4·4 inner 0 | 116 592 | 388 944 | 3.34 |
+
+No preset in `config.js` culls a single face, so for everything shipped this
+is exactly zero. It only bites on the zero-gap layouts you actually drive the
+app with, and it is vertex work only — a hidden face generates no fragments,
+and the mask test is the first thing the shader does. Against it, the same
+specimen is 19× smaller and its upload 28× smaller. I have not found a way to
+skip the faces without either six draw calls a specimen or a per-frame rebuild
+of the instance buffer, and both cost more than they save. Worth watching on
+your hardware at R=64 with a zero inner gap; if it shows, that is the point to
+reconsider, not before.
+
+### 7.6 Verified, not assumed
+
+`npm test` grew `test/instancing.test.js`: the record holds exactly the
+occupied cells, its mask popcount is the quad total, the zero-gap fixture
+culls 51% of faces while the separated ones cull none, the analytic bounds
+match a scan over the expanded vertices to the bit, and — the load-bearing one
+— a CPU model of the vertex shader walks the instances and reproduces the
+baked mesh vertex for vertex, colour for colour.
+
+`npm run test:browser` grew `test/browser/render-modes.test.js`, which drives
+all twelve render × colour combinations in headless Chrome and reads the
+pixels back, because a failed shader compile does not throw: three logs it and
+carries on drawing nothing, so no assertion on the inspector would have
+noticed.
+
+Beyond the committed tests, the two builds were compared directly: the same
+twelve combinations screenshotted on `main` and on the branch, eight frames
+averaged, centre-cropped past the HUD. Worst lit-pixel difference 0.14%, worst
+channel mean difference **0.93 of 255**, worst colour-histogram L1 0.186 on a
+0–2 scale — against a separation of 0.06–0.50 between the three colourings
+themselves. The residue is the idle bob, which cannot be frozen from the UI.
+
+### 7.7 Answering 5.4: does the LOD proxy still earn its keep?
+
+Measured on the branch at `#0,0,15.0,0`, 294 specimens visible:
+
+| | LOD on | `?fullGeometry=1` |
+|---|---|---|
+| triangles submitted | 102 946 | 131 794 |
+| resident | 0.632 MB | 0.612 MB |
+| `main.layout` mean | 0.211 ms | 0.178 ms |
+
+The proxy removes 22% of submitted triangles for 0.033 ms a frame of CPU and
+20 KB. Under baked geometry it also saved a 40 MB buffer and its upload, and
+that reason is now gone — which is most of why your instinct in 5.4 was right.
+What is left is a real but small triangle saving at a real but small CPU cost.
+
+I did not act on it: headless Chrome is software-rasterised, so the frame
+times above measure submission, not the GPU, and 103k against 132k triangles
+is not a number either side of which a real GPU cares. Deciding it needs your
+machine. Nothing was removed, so the switch is still yours to throw.
+
+### 7.8 Left alone, deliberately
+
+- **`voxelCenters()`** is still exported and still tested, but nothing in the
+  app calls it now — the centres mode reads the record. It documents the
+  centre convention and costs nothing; say the word and it goes.
+- **`CACHE_BYTES` / `UPLOAD_BYTES`** are untouched. Both are now far looser
+  than they need to be, which is the point, but retuning them is a separate
+  decision from making them unnecessary.

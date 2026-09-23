@@ -8,6 +8,6 @@
     "serve": "python3 -m http.server 8000",
     "test": "node --test test/*.test.js",
     "golden": "node test/make-golden.js",
-    "test:browser": "node --test test/browser/*.test.js"
+    "test:browser": "node --test --test-concurrency=1 test/browser/*.test.js"
   }
 }

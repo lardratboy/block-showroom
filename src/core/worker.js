@@ -7,10 +7,13 @@ const core = createBimoblockCore();
 self.onmessage = ({data: job}) => {
   try {
     const result = runNumericJob(core, job);
+    // The instance record is what crosses now: a flat index, a face mask and
+    // an orbit byte per occupied cell, plus the axis centre table. Six bytes
+    // a voxel where the baked vertex buffers were over a kilobyte.
+    const inst = result.instances;
     const transfer = job.type === 'build'
-      ? [result.occ.buffer, result.geometry.pos.buffer, result.geometry.col.buffer,
-         result.geometry.nrm.buffer, result.geometry.idx.buffer,
-         ...(result.geometry.colOrbit ? [result.geometry.colOrbit.buffer] : [])] : [];
+      ? [result.occ.buffer, inst.cells.buffer, inst.masks.buffer, inst.centers.buffer,
+         ...(inst.orbitIdx ? [inst.orbitIdx.buffer] : [])] : [];
     self.postMessage({ jobId: job.jobId, result }, transfer);
   } catch (error){
     self.postMessage({ jobId: job.jobId, error: String(error.message || error) });

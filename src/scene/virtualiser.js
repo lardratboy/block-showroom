@@ -6,8 +6,9 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 import { Pin, Focus, State } from '../state.js';
-import { blockGeometry, wireGeometryOf, pointsGeometryOf, centersGeometry,
-         cellWorldX, cellWorldZ, inDistrict } from '../lattice/recipe.js';
+import { Core } from '../core/bimoblock-core.js';
+import { InstancedSpecimen, applyInstancing } from './instancing.js';
+import { cellWorldX, cellWorldZ, inDistrict } from '../lattice/recipe.js';
 
 export class Virtualiser {
   constructor(rig, blocksG){
@@ -77,6 +78,9 @@ export class Virtualiser {
           vertexColors: true, roughness: 0.22, metalness: 0.08
         }));
     }
+    // Every specimen drawable reads its position from the instance centres;
+    // the stock material is otherwise untouched (see scene/instancing.js).
+    applyInstancing(mesh.material);
     mesh.frustumCulled = true;
     this.blocksG.add(mesh);
     return mesh;
@@ -89,8 +93,9 @@ export class Virtualiser {
   }
 
   /* The render mode changed: drop every drawable so the next layout() pass
-     takes fresh ones of the new class. Cached block data is untouched (the
-     derived views stay resident on it), so this is cheap and instant. */
+     takes fresh ones of the new class. Cached block data is untouched — every
+     mode indexes the instance attributes already resident on it — so this is
+     cheap and instant, and nothing has to be regenerated or re-uploaded. */
   resetSlots(){
     for (const [, s] of this.slots) this.releaseSlot(s);
     this.slots.clear();
@@ -98,41 +103,26 @@ export class Virtualiser {
     this.spare.length = 0;
   }
 
-  /* The geometry to draw for block `p` whose mesh-of-record is `geo` (full
-     or LOD proxy), in the current render mode. Views are derived on first
-     use and cached: wire/points hang off the mesh they index (userData) so
-     the LOD proxy gets its own; centers are a property of the voxels, so
-     one per block regardless of LOD.
-     @param {import('../types.js').BlockData} p @param {THREE.BufferGeometry} geo */
-  viewOf(p, geo){
+  /* The geometry to draw for block `p` in the current render mode, from the
+     full-resolution bundle or the proxy. Every mode indexes the same
+     per-specimen instance attributes, so trying a second mode allocates a
+     small geometry object and nothing on the GPU.
+     Centres are a property of the voxels rather than of the drawn mesh, so
+     that mode reads the full-resolution record however small the specimen is
+     on screen — exactly as the separate centres point cloud did, except that
+     asking for it no longer builds a proxy nobody goes on to draw.
+     @param {import('../types.js').BlockData} p @param {boolean} wantLod */
+  viewOf(p, wantLod){
     const mode = State.renderMode;
-    if (mode === 'solid') return geo;
-    if (mode === 'centers'){
-      if (!p.geoCenters){
-        p.geoCenters = centersGeometry(p.occ, p.levels, p.R);
-        this._charge(p, p.geoCenters.userData.bytes);
-      }
-      return p.geoCenters;
-    }
-    const slot = mode === 'wire' ? 'wire' : 'points';
-    let view = geo.userData[slot];
-    if (!view){
-      view = geo.userData[slot] = mode === 'wire' ? wireGeometryOf(geo) : pointsGeometryOf(geo);
-      this._charge(p, view.userData.bytes);
-    }
-    return view;
+    const views = (wantLod && mode !== 'centers') ? this.lodOf(p) : p.views;
+    return views.geometryFor(mode);
   }
   _charge(p, bytes){ p.bytes += bytes; this.cacheBytes += bytes; }
 
-  /* Free a block's GPU-side geometry and every view derived from it. */
+  /* Free a block's GPU-side instance buffers, full resolution and proxy. */
   static disposeBlock(p){
-    for (const g of [p.geo, p.geoLod]){
-      if (!g) continue;
-      if (g.userData.wire) g.userData.wire.dispose();
-      if (g.userData.points) g.userData.points.dispose();
-      g.dispose();
-    }
-    if (p.geoCenters) p.geoCenters.dispose();
+    if (p.views) p.views.dispose();
+    if (p.viewsLod) p.viewsLod.dispose();
   }
 
   computeVisible(){
@@ -231,15 +221,16 @@ export class Virtualiser {
     this.evict();
   }
 
-  /* The outer-level proxy (r0^3 cells) is only meshed if something actually
+  /* The outer-level proxy (r0^3 cells) is only built if something actually
      asks to draw one, which for a lattice this shallow is a minority of cells. */
   lodOf(p){
-    if (!p.geoLod){
-      p.geoLod = blockGeometry(p.occ, 1, p.filled, p.levels, p.R);
-      p.lodTris = p.geoLod.userData.tris;
-      this._charge(p, p.geoLod.userData.bytes);
+    if (!p.viewsLod){
+      p.instLod = Core.instanceArrays(p.occ, 1, p.filled, p.levels, p.R);
+      p.viewsLod = new InstancedSpecimen(p.instLod);
+      p.lodTris = p.instLod.count * 12;
+      this._charge(p, p.instLod.bytes + p.viewsLod.bytes);
     }
-    return p.geoLod;
+    return p.viewsLod;
   }
 
   /* Forget everything: every cached block is disposed and every slot

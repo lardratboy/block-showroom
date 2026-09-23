@@ -665,11 +665,41 @@ function siteTier(occ, filled, levels, R){
   return out;
 }
 
-/** @param {Uint8Array} occ @param {number} tier 0 = full mesh, 1 = outer-tier proxy
- *  @param {number} filled @param {import('../types.js').Level[]} levels @param {number} R
- *  @param {Uint8Array} [orbit] @param {number} [orbitOrder]
- *  @returns {import('../types.js').MeshArrays} */
-function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
+/* Which of a cube's six faces meet each of its eight corners, as face-mask
+   bits in the FACE_D order (+X -X +Y -Y +Z -Z).  Corner c is indexed
+   ((sx>0)<<2) | ((sy>0)<<1) | (sz>0); a corner is carried by the mesh iff
+   any of its three faces survived occlusion, which is what makes the
+   bounding radius computable without expanding a single vertex. */
+const CORNER_FACES = new Uint8Array(8);
+for (let c = 0; c < 8; c++)
+  CORNER_FACES[c] = (c & 4 ? 1 : 2) | (c & 2 ? 4 : 8) | (c & 1 ? 16 : 32);
+
+/* ---------------------------------------------------------------------
+   THE INSTANCE RECORD
+   ---------------------------------------------------------------------
+   The occupancy walk is the only place face occlusion is decided, and what
+   it produces is the specimen in full: which cells are occupied, which of
+   their faces survive, and the axis table their coordinates come from.
+   Every representation the app draws or exports is a function of that
+   record, so it — not a baked vertex buffer — is what a build returns and
+   what the cache holds.
+
+     cells   flat grid index per occupied cell, in walk order (Uint32)
+     masks   the six-bit surviving-face set for that cell (Uint8)
+     orbitIdx  per-cell fold-element index, full resolution only (Uint8)
+     centers   the f64 axis centre table, shared by all three axes
+     cellSize  physical cube width, in the same unit-box coordinates
+
+   `centers` stays double precision deliberately.  A centre rounded to f32
+   and then offset by half a cell lands up to one f32 ulp away from the
+   same vertex computed in double and rounded once, so keeping the table
+   exact is what lets expandInstances() reproduce a baked mesh bit for bit
+   while the GPU still gets the compact f32 centres it wants.
+   @param {Uint8Array} occ @param {number} tier 0 = full mesh, 1 = outer-tier proxy
+   @param {number} filled @param {import('../types.js').Level[]} levels @param {number} R
+   @param {Uint8Array} [orbit] @param {number} [orbitOrder]
+   @returns {import('../types.js').InstanceArrays} */
+function instanceArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
   const started = performance.now();
   const r0 = levels[0].radix;
   const N = tier ? r0 : R;
@@ -694,16 +724,17 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
     touch[u] = (centers[u+1] - centers[u]) <= cellSize * (1 + 1e-9) ? 1 : 0;
 
   // One walk over the grid records the occupied cells and, for each, which of
-  // its six faces survive.  The emit pass below then iterates `filled` cells
-  // instead of N^3 ones and never probes a neighbour again.
+  // its six faces survive.  Everything downstream iterates those `count`
+  // cells instead of N^3 ones and never probes a neighbour again.
   // `filled` sizes the lists, but the walk never trusts it: a caller passing
   // a stale count would otherwise silently drop cells off the end.
-  let cells = new Int32Array(tier ? N*N*N : Math.max(filled, 1));
-  let masks = new Uint8Array(cells.length);  // bit f set = face f is emitted
-  let nCells = 0, quads = 0;
+  let cells = new Uint32Array(tier ? N*N*N : Math.max(filled, 1));
+  let masks = new Uint8Array(cells.length);  // bit f set = face f survives
+  let orbitIdx = wantOrbit ? new Uint8Array(cells.length) : null;
+  let count = 0, quads = 0;
   // Occupied extent per axis: the bounding box is analytic from these, since
   // a cell at an axis extreme always has an unoccupied neighbour beyond it
-  // and so always emits the face that carries the extreme vertex.
+  // and so always keeps the face that carries the extreme vertex.
   let minX = N, minY = N, minZ = N, maxX = -1, maxY = -1, maxZ = -1;
   const NN = N*N;
   for (let z = 0; z < N; z++) for (let y = 0; y < N; y++){
@@ -717,16 +748,76 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
       if (!(y - 1 >= 0 && touch[y-1]   && cell[x + row - N]))  { m |= 8;  quads++; }
       if (!(z + 1 <  N && touch[z]     && cell[x + row + NN])) { m |= 16; quads++; }
       if (!(z - 1 >= 0 && touch[z-1]   && cell[x + row - NN])) { m |= 32; quads++; }
-      if (nCells === cells.length){
-        const c2 = new Int32Array(nCells * 2); c2.set(cells); cells = c2;
-        const m2 = new Uint8Array(nCells * 2); m2.set(masks); masks = m2;
+      if (count === cells.length){
+        const c2 = new Uint32Array(count * 2); c2.set(cells); cells = c2;
+        const m2 = new Uint8Array(count * 2); m2.set(masks); masks = m2;
+        if (orbitIdx){ const o2 = new Uint8Array(count * 2); o2.set(orbitIdx); orbitIdx = o2; }
       }
-      cells[nCells] = x + row; masks[nCells] = m; nCells++;
+      const li = x + row;
+      cells[count] = li; masks[count] = m;
+      if (orbitIdx) orbitIdx[count] = orbit[li];
+      count++;
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
       if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
     }
   }
+  // The walk over-allocates whenever `filled` was an upper bound (always, for
+  // the tier proxy). The record is retained for the specimen's whole life and
+  // shipped across a worker boundary, so trim rather than carry the slack.
+  if (count !== cells.length){
+    cells = cells.slice(0, count);
+    masks = masks.slice(0, count);
+    if (orbitIdx) orbitIdx = orbitIdx.slice(0, count);
+  }
+
+  /* Bounds, without touching a vertex. The centre is the analytic box
+     midpoint; the radius is the farthest *surviving* corner, which the
+     face mask names directly — an enclosed cell contributes nothing, and
+     a cell at an extreme always contributes its extreme corner. Rounding
+     each corner with fround reproduces the figure a pass over the f32
+     vertex buffer would have produced, to the bit. */
+  const f32 = Math.fround;
+  const empty = count === 0;
+  const cx = empty ? 0 : (f32(centers[minX] - half) + f32(centers[maxX] + half)) / 2;
+  const cy = empty ? 0 : (f32(centers[minY] - half) + f32(centers[maxY] + half)) / 2;
+  const cz = empty ? 0 : (f32(centers[minZ] - half) + f32(centers[maxZ] + half)) / 2;
+  let radiusSq = 0;
+  for (let c = 0; c < count; c++){
+    const m = masks[c];
+    if (!m) continue;
+    const li = cells[c];
+    const x = li % N, y = ((li / N) | 0) % N, z = (li / NN) | 0;
+    const xl = f32(centers[x] - half) - cx, xh = f32(centers[x] + half) - cx;
+    const yl = f32(centers[y] - half) - cy, yh = f32(centers[y] + half) - cy;
+    const zl = f32(centers[z] - half) - cz, zh = f32(centers[z] + half) - cz;
+    for (let k = 0; k < 8; k++){
+      if (!(m & CORNER_FACES[k])) continue;
+      const qx = k & 4 ? xh : xl, qy = k & 2 ? yh : yl, qz = k & 1 ? zh : zl;
+      const d = qx*qx + qy*qy + qz*qz;
+      if (d > radiusSq) radiusSq = d;
+    }
+  }
+
+  const done = performance.now();
+  return { cells, masks, orbitIdx, orbitOrder: wantOrbit ? orbitOrder : 0,
+    count, N, centers, cellSize, quads, tris: quads * 2,
+    bounds: { center: [cx, cy, cz], radius: Math.sqrt(radiusSq) },
+    bytes: cells.byteLength + masks.byteLength + (orbitIdx ? orbitIdx.byteLength : 0)
+         + centers.byteLength,
+    timings: { mesh: done - started, bounds: 0 } };
+}
+
+/** Expand an instance record into the independent-quad vertex buffers the
+ *  OBJ exporters and the golden tests read. This is the only place the
+ *  baked form is still built, and it is built on demand rather than kept.
+ *  @param {import('../types.js').InstanceArrays} rec
+ *  @returns {import('../types.js').MeshArrays} */
+function expandInstances(rec){
+  const started = performance.now();
+  const { cells, masks, orbitIdx, orbitOrder, count, N, centers, cellSize, quads } = rec;
+  const wantOrbit = !!orbitIdx && orbitOrder > 0;
+  const NN = N*N;
 
   const pos = new Float32Array(quads * 12);
   const col = new Float32Array(quads * 12);
@@ -734,16 +825,8 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
   const nrm = new Float32Array(quads * 12);
   const idx = new (quads * 4 > 65535 ? Uint32Array : Uint16Array)(quads * 6);
 
-  // Analytic centre, so the emit loop below can accumulate the bounding
-  // radius as it writes rather than re-reading every vertex afterwards.
-  const f32 = Math.fround;
-  const empty = nCells === 0;
-  const cx = empty ? 0 : (f32(centers[minX] - half) + f32(centers[maxX] + half)) / 2;
-  const cy = empty ? 0 : (f32(centers[minY] - half) + f32(centers[maxY] + half)) / 2;
-  const cz = empty ? 0 : (f32(centers[minZ] - half) + f32(centers[maxZ] + half)) / 2;
-
-  let v = 0, o = 0, io = 0, radiusSq = 0;
-  for (let c = 0; c < nCells; c++){
+  let v = 0, o = 0, io = 0;
+  for (let c = 0; c < count; c++){
     const m = masks[c];
     const li = cells[c];
     const x = li % N, y = ((li / N) | 0) % N, z = (li / NN) | 0;
@@ -753,7 +836,7 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
     // faces rather than fading like the gamut gradient does.
     let ocR = 0, ocG = 0, ocB = 0;
     if (wantOrbit){
-      const oc = orbitColor(orbit[li], orbitOrder);
+      const oc = orbitColor(orbitIdx[c], orbitOrder);
       ocR = oc[0]; ocG = oc[1]; ocB = oc[2];
     }
     for (let f = 0; f < 6; f++){
@@ -773,10 +856,6 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
         if (wantOrbit){ colOrbit[o] = ocR; colOrbit[o+1] = ocG; colOrbit[o+2] = ocB; }
 
         nrm[o] = dx; nrm[o+1] = dy; nrm[o+2] = dz;
-
-        const qx = pos[o] - cx, qy = pos[o+1] - cy, qz = pos[o+2] - cz;
-        const d = qx*qx + qy*qy + qz*qz;
-        if (d > radiusSq) radiusSq = d;
         o += 3;
       }
       idx[io] = v; idx[io+1] = v+1; idx[io+2] = v+2;
@@ -785,11 +864,24 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
     }
   }
 
-  const meshed = performance.now();
   return { pos, col, colOrbit, nrm, idx, quads, tris: quads * 2,
-    bounds: { center: [cx, cy, cz], radius: Math.sqrt(radiusSq) },
+    bounds: { center: rec.bounds.center.slice(), radius: rec.bounds.radius },
     bytes: pos.byteLength + col.byteLength + (colOrbit ? colOrbit.byteLength : 0) + nrm.byteLength + idx.byteLength,
-    timings: { mesh: meshed - started, bounds: 0 } };
+    timings: { mesh: performance.now() - started, bounds: 0 } };
+}
+
+/** The baked mesh for an occupancy grid: the instance record, expanded.
+ *  Kept because the OBJ exporters and the golden hashes are defined on it;
+ *  nothing on the render path calls it any more.
+ *  @param {Uint8Array} occ @param {number} tier 0 = full mesh, 1 = outer-tier proxy
+ *  @param {number} filled @param {import('../types.js').Level[]} levels @param {number} R
+ *  @param {Uint8Array} [orbit] @param {number} [orbitOrder]
+ *  @returns {import('../types.js').MeshArrays} */
+function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
+  const rec = instanceArrays(occ, tier, filled, levels, R, orbit, orbitOrder);
+  const out = expandInstances(rec);
+  out.timings = { mesh: rec.timings.mesh + out.timings.mesh, bounds: 0 };
+  return out;
 }
 
 /* One point per occupied voxel, at the centre of its physical cube, in the
@@ -960,14 +1052,19 @@ function buildBlock(P, levels){
   }
 
   const selected = performance.now();
-  const geometry = meshArrays(occ, 0, filled, levels, R, orbit, orbitOrder);
-  return { occ, R, filled, envelopeCells: nVals, geometry,
+  const instances = instanceArrays(occ, 0, filled, levels, R, orbit, orbitOrder);
+  return { occ, R, filled, envelopeCells: nVals, instances,
     timings: { evaluate: evaluated - started, select: selected - evaluated,
-      mesh: geometry.timings.mesh, bounds: geometry.timings.bounds,
+      mesh: instances.timings.mesh, bounds: instances.timings.bounds,
       total: performance.now() - started } };
 }
 
-return { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution, buildBlock, meshArrays, voxelCenters, autOrder, seedWords };
+/* The cube face templates, published so the renderer's instanced template
+   geometry is cut from the same table the CPU expansion uses: same face
+   order, same corner order, same winding. */
+const FACE_TEMPLATE = { dir: FACE_D, off: FACE_OFF };
+
+return { GROUPS, ARCH_NAMES, FIELD_NAMES, NATIVE_FIELDS, LEGACY_FIELD_COUNT, LIFT_NAMES, levelResolution, buildBlock, instanceArrays, expandInstances, meshArrays, voxelCenters, autOrder, seedWords, orbitColor, FACE_TEMPLATE };
 }
 // Main-thread instance. The worker builds its own via createBimoblockCore().
 export const Core = createBimoblockCore();
