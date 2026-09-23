@@ -614,14 +614,27 @@ function autOrder(occ, R){
      G = (local_Y + 0.5)
      B = (local_Z + 0.5)
    ===================================================================== */
-const OBJ_FACES = [
-  { d:[ 1,0,0], n:1, v:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]] },
-  { d:[-1,0,0], n:2, v:[[0,0,1],[0,1,1],[0,1,0],[0,0,0]] },
-  { d:[0, 1,0], n:3, v:[[0,1,0],[0,1,1],[1,1,1],[1,1,0]] },
-  { d:[0,-1,0], n:4, v:[[0,0,1],[0,0,0],[1,0,0],[1,0,1]] },
-  { d:[0,0, 1], n:5, v:[[1,0,1],[1,1,1],[0,1,1],[0,0,1]] },
-  { d:[0,0,-1], n:6, v:[[0,0,0],[0,1,0],[1,1,0],[1,0,0]] }
-];
+/* Cube face templates, in the fixed order +X -X +Y -Y +Z -Z.  Flat typed
+   arrays rather than per-face objects holding arrays of arrays: the emit
+   loop below runs once per exposed face and indexes straight into these
+   instead of walking a pointer chain per corner.
+     FACE_D   - outward normal, and the logical neighbour step, 6 x 3
+     FACE_OFF - corner offsets from the cube centre in cell units,
+                6 faces x 4 corners x 3, always +/- 0.5.  Winding is
+                counter-clockwise seen from outside, unchanged.
+   The neighbour test is a table too — see `touch` in meshArrays(). */
+const FACE_D = new Float64Array([
+   1,0,0,  -1,0,0,   0,1,0,   0,-1,0,   0,0,1,   0,0,-1 ]);
+const FACE_OFF = new Float64Array([
+  // +X                     -X
+   .5,-.5,-.5,  .5,.5,-.5,  .5,.5,.5,  .5,-.5,.5,
+  -.5,-.5,.5,  -.5,.5,.5,  -.5,.5,-.5, -.5,-.5,-.5,
+  // +Y                     -Y
+  -.5,.5,-.5,  -.5,.5,.5,   .5,.5,.5,  .5,.5,-.5,
+  -.5,-.5,.5,  -.5,-.5,-.5, .5,-.5,-.5, .5,-.5,.5,
+  // +Z                     -Z
+   .5,-.5,.5,   .5,.5,.5,  -.5,.5,.5, -.5,-.5,.5,
+  -.5,-.5,-.5, -.5,.5,-.5,  .5,.5,-.5, .5,-.5,-.5 ]);
 
 function siteTier(occ, filled, levels, R){
   const r0 = levels[0].radix, macroCells = r0*r0*r0;
@@ -661,34 +674,57 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
   const r0 = levels[0].radix;
   const N = tier ? r0 : R;
   const sites = tier ? siteTier(occ, filled, levels, R) : null;
-  const at = tier
-    ? (x, y, z) => sites[x + r0*y + r0*r0*z] !== 0
-    : (x, y, z) => occ[x + R*y + R*R*z] !== 0;
+  const cell = tier ? sites : occ;          // occupancy the mesh is built from
   const axis = tierAxisLayout(levels, tier);
   const centers = axis.centers, cellSize = axis.cellSize;
+  const half = cellSize / 2;
   // Orbit-index coloring only has a well-defined meaning at full resolution —
   // the LOD proxy's cells are aggregates of several voxels that may carry
   // different orbit indices, so it always stays on the gamut attribute.
   const wantOrbit = !tier && !!orbit && orbitOrder > 0;
 
   // Occupied logical neighbours hide a face only when their physical cubes
-  // still touch.  A non-zero gap at any crossed tier boundary exposes both
-  // sides of the resulting opening.
-  const occludes = (x, y, z, nx, ny, nz, f) => {
-    if (nx < 0 || nx >= N || ny < 0 || ny >= N || nz < 0 || nz >= N || !at(nx, ny, nz)) return false;
-    const a = f.d[0] ? Math.abs(centers[nx] - centers[x])
-            : f.d[1] ? Math.abs(centers[ny] - centers[y])
-                     : Math.abs(centers[nz] - centers[z]);
-    return a <= cellSize * (1 + 1e-9);
-  };
+  // still touch.  That test depends only on the pair of indices along one
+  // axis, never on the other two, so it collapses to a table: touch[u] is
+  // set when cells u and u+1 are close enough to hide the face between them.
+  // A non-zero gap at any crossed tier boundary leaves the pair apart and
+  // exposes both sides of the resulting opening.
+  const touch = new Uint8Array(N);
+  for (let u = 0; u + 1 < N; u++)
+    touch[u] = (centers[u+1] - centers[u]) <= cellSize * (1 + 1e-9) ? 1 : 0;
 
-  let quads = 0;
-  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++){
-    if (!at(x, y, z)) continue;
-    for (const f of OBJ_FACES){
-      const nx = x + f.d[0], ny = y + f.d[1], nz = z + f.d[2];
-      if (occludes(x, y, z, nx, ny, nz, f)) continue;
-      quads++;
+  // One walk over the grid records the occupied cells and, for each, which of
+  // its six faces survive.  The emit pass below then iterates `filled` cells
+  // instead of N^3 ones and never probes a neighbour again.
+  // `filled` sizes the lists, but the walk never trusts it: a caller passing
+  // a stale count would otherwise silently drop cells off the end.
+  let cells = new Int32Array(tier ? N*N*N : Math.max(filled, 1));
+  let masks = new Uint8Array(cells.length);  // bit f set = face f is emitted
+  let nCells = 0, quads = 0;
+  // Occupied extent per axis: the bounding box is analytic from these, since
+  // a cell at an axis extreme always has an unoccupied neighbour beyond it
+  // and so always emits the face that carries the extreme vertex.
+  let minX = N, minY = N, minZ = N, maxX = -1, maxY = -1, maxZ = -1;
+  const NN = N*N;
+  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++){
+    const row = N*y + NN*z;
+    for (let x = 0; x < N; x++){
+      if (!cell[x + row]) continue;
+      let m = 0;
+      if (!(x + 1 <  N && touch[x]     && cell[x+1 + row])) { m |= 1;  quads++; }
+      if (!(x - 1 >= 0 && touch[x-1]   && cell[x-1 + row])) { m |= 2;  quads++; }
+      if (!(y + 1 <  N && touch[y]     && cell[x + row + N]))  { m |= 4;  quads++; }
+      if (!(y - 1 >= 0 && touch[y-1]   && cell[x + row - N]))  { m |= 8;  quads++; }
+      if (!(z + 1 <  N && touch[z]     && cell[x + row + NN])) { m |= 16; quads++; }
+      if (!(z - 1 >= 0 && touch[z-1]   && cell[x + row - NN])) { m |= 32; quads++; }
+      if (nCells === cells.length){
+        const c2 = new Int32Array(nCells * 2); c2.set(cells); cells = c2;
+        const m2 = new Uint8Array(nCells * 2); m2.set(masks); masks = m2;
+      }
+      cells[nCells] = x + row; masks[nCells] = m; nCells++;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
     }
   }
 
@@ -698,24 +734,36 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
   const nrm = new Float32Array(quads * 12);
   const idx = new (quads * 4 > 65535 ? Uint32Array : Uint16Array)(quads * 6);
 
-  let v = 0, o = 0, io = 0;
-  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++){
-    if (!at(x, y, z)) continue;
+  // Analytic centre, so the emit loop below can accumulate the bounding
+  // radius as it writes rather than re-reading every vertex afterwards.
+  const f32 = Math.fround;
+  const empty = nCells === 0;
+  const cx = empty ? 0 : (f32(centers[minX] - half) + f32(centers[maxX] + half)) / 2;
+  const cy = empty ? 0 : (f32(centers[minY] - half) + f32(centers[maxY] + half)) / 2;
+  const cz = empty ? 0 : (f32(centers[minZ] - half) + f32(centers[maxZ] + half)) / 2;
+
+  let v = 0, o = 0, io = 0, radiusSq = 0;
+  for (let c = 0; c < nCells; c++){
+    const m = masks[c];
+    const li = cells[c];
+    const x = li % N, y = ((li / N) | 0) % N, z = (li / NN) | 0;
+    const ox = centers[x], oy = centers[y], oz = centers[z];
     // One flat orbit color per voxel, not per vertex — every corner of every
     // face on this cube shares it, so orbit boundaries land exactly on cube
     // faces rather than fading like the gamut gradient does.
-    let ocR, ocG, ocB;
+    let ocR = 0, ocG = 0, ocB = 0;
     if (wantOrbit){
-      const oc = orbitColor(orbit[x + R*y + R*R*z], orbitOrder);
+      const oc = orbitColor(orbit[li], orbitOrder);
       ocR = oc[0]; ocG = oc[1]; ocB = oc[2];
     }
-    for (const f of OBJ_FACES){
-      const nx = x + f.d[0], ny = y + f.d[1], nz = z + f.d[2];
-      if (occludes(x, y, z, nx, ny, nz, f)) continue;
-      for (const vt of f.v){
-        const px = centers[x] + (vt[0] - 0.5) * cellSize;
-        const py = centers[y] + (vt[1] - 0.5) * cellSize;
-        const pz = centers[z] + (vt[2] - 0.5) * cellSize;
+    for (let f = 0; f < 6; f++){
+      if (!(m & (1 << f))) continue;
+      const nb = f * 3, vb = f * 12;
+      const dx = FACE_D[nb], dy = FACE_D[nb+1], dz = FACE_D[nb+2];
+      for (let k = vb; k < vb + 12; k += 3){
+        const px = ox + FACE_OFF[k]   * cellSize;
+        const py = oy + FACE_OFF[k+1] * cellSize;
+        const pz = oz + FACE_OFF[k+2] * cellSize;
 
         pos[o]   = px; pos[o+1] = py; pos[o+2] = pz;
         // Pure normalized local gamut color
@@ -724,7 +772,11 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
         col[o+2] = pz + 0.5;
         if (wantOrbit){ colOrbit[o] = ocR; colOrbit[o+1] = ocG; colOrbit[o+2] = ocB; }
 
-        nrm[o] = f.d[0]; nrm[o+1] = f.d[1]; nrm[o+2] = f.d[2];
+        nrm[o] = dx; nrm[o+1] = dy; nrm[o+2] = dz;
+
+        const qx = pos[o] - cx, qy = pos[o+1] - cy, qz = pos[o+2] - cz;
+        const d = qx*qx + qy*qy + qz*qz;
+        if (d > radiusSq) radiusSq = d;
         o += 3;
       }
       idx[io] = v; idx[io+1] = v+1; idx[io+2] = v+2;
@@ -734,18 +786,10 @@ function meshArrays(occ, tier, filled, levels, R, orbit, orbitOrder){
   }
 
   const meshed = performance.now();
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < pos.length; i += 3) for (let a = 0; a < 3; a++){
-    min[a] = Math.min(min[a], pos[i+a]); max[a] = Math.max(max[a], pos[i+a]);
-  }
-  const center = pos.length ? min.map((v,a) => (v + max[a]) / 2) : [0,0,0];
-  let radiusSq = 0;
-  for (let i = 0; i < pos.length; i += 3)
-    radiusSq = Math.max(radiusSq, (pos[i]-center[0])**2 + (pos[i+1]-center[1])**2 + (pos[i+2]-center[2])**2);
   return { pos, col, colOrbit, nrm, idx, quads, tris: quads * 2,
-    bounds: { center, radius: Math.sqrt(radiusSq) },
+    bounds: { center: [cx, cy, cz], radius: Math.sqrt(radiusSq) },
     bytes: pos.byteLength + col.byteLength + (colOrbit ? colOrbit.byteLength : 0) + nrm.byteLength + idx.byteLength,
-    timings: { mesh: meshed - started, bounds: performance.now() - meshed } };
+    timings: { mesh: meshed - started, bounds: 0 } };
 }
 
 /* One point per occupied voxel, at the centre of its physical cube, in the

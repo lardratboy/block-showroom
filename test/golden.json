@@ -44,6 +44,15 @@
     "idx": "55698f65",
     "aut": 48
   },
+  "solid-core": {
+    "R": 15,
+    "filled": 336,
+    "envelopeCells": 837,
+    "occ": "979afb25",
+    "pos": "6eadb935",
+    "idx": "2db0df45",
+    "aut": 4
+  },
   "tier-symmetry": {
     "R": 9,
     "filled": 60,

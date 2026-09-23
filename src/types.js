@@ -60,7 +60,10 @@
  * @property {number} tris                  Always `quads * 2`.
  * @property {{center:number[], radius:number}} bounds  Bounding sphere.
  * @property {number} bytes                 Total byte length of every buffer.
- * @property {{mesh:number, bounds:number}} timings  Milliseconds.
+ * @property {{mesh:number, bounds:number}} timings  Milliseconds. `bounds`
+ *   is kept for the perf-sample key but is always 0: the bounding sphere is
+ *   now derived from the occupied extent and accumulated during the emit,
+ *   so there is no separate pass to time.
  */
 
 /**
