@@ -19,3 +19,10 @@ Run `npm run serve`, open http://localhost:8000/, then:
     vertices → a point at every mesh corner; box centers → one point per
     voxel; solid → back to shaded boxes. Switching is instant (no re-mint)
     and the `color:` dropdown still recolours every mode.
+14. Levels panel: set a zero innermost gap (e.g. radices `3, 5` with gaps
+    `0.50, 0.00`) → specimens read as solid blocks with no seams, and as one
+    rises into place while still translucent you should not see the inside of
+    it: the faces between touching cubes are still culled.
+15. Console: `showroomPerformance().residentBytes` — a few hundred KB for a
+    few hundred specimens on the default preset, not tens of MB. Specimens
+    are instanced, so a mode switch should not change it.
