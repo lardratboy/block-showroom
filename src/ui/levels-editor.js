@@ -70,7 +70,7 @@ export class LevelsEditor {
       const row = document.createElement('div'); row.className = 'lvrow';
       row.innerHTML =
         `<span class="idx">${i===0?'out':(i===Tier.levels.length-1?'in':i)}</span>` +
-        `<input type="number" min="2" max="12" value="${lv.radix}" data-i="${i}" class="radixIn">` +
+        `<input type="number" min="2" max="16" value="${lv.radix}" data-i="${i}" class="radixIn">` +
         `<input type="range" min="0" max="100" value="${Math.round(lv.gap*100)}" data-i="${i}" class="gapIn" title="Sibling spacing at this tier (% of child width)">` +
         `<span class="gapv">${lv.gap.toFixed(2)}</span>` +
         `<button data-i="${i}" class="delBtn" title="remove this level">×</button>`;
