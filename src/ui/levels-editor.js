@@ -88,7 +88,7 @@ export class LevelsEditor {
     this.resLine.textContent = `R=${R} · ${(R*R*R).toLocaleString()} cells`;
 
     lvRows.querySelectorAll('.radixIn').forEach(el => el.onchange = e => {
-      const i = +e.target.dataset.i, want = Math.max(2, Math.min(12, parseInt(e.target.value) || 2));
+      const i = +e.target.dataset.i, want = Math.max(2, Math.min(16, parseInt(e.target.value) || 2));
       const trial = Tier.levels.map((l,k) => k===i ? { ...l, radix:want } : l);
       if (levelResolution(trial) > MAX_R){
         console.warn(`[bimoblock] radix change rejected: R would exceed MAX_R=${MAX_R}`);
