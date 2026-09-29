@@ -99,3 +99,34 @@ test('double clicking a marked cell unmarks it', { skip }, async () => {
   for (let n = 0; n < 2; n++){ await click(s, 600, 400); await click(s, 600, 400); await sleep(500); }
   assert.match(await toast(s), /^unmarked -?\d+, -?\d+ · 0 marked/);
 });
+
+/* A marked sheet is repacked into the squarest grid that holds it: four
+   marks scattered over the view come out as a 2 × 2, in marking order, one
+   lattice pitch (CFG.CELL = 2.6) apart and centred on the origin. */
+test('the marked sheet lays its specimens out as a square grid', { skip }, async () => {
+  const s = browser.session;
+  await loadShowroom(s, `${server.origin}/?grid#0,0,15.0,0`);
+  const marked = [];
+  for (const [x, y] of [[400, 300], [800, 300], [400, 500], [800, 500]]){
+    await click(s, x, y); await click(s, x, y); await sleep(500);
+    const m = (await toast(s)).match(/^marked (-?\d+), (-?\d+)/);
+    assert.ok(m, 'each click lands on a fresh cell');
+    marked.push(`cell_${m[1]}_${m[2]}`);
+  }
+
+  const obj = await exportSheet(s);
+  assert.match(obj.text, /marked specimens \(4\) in a 2 × 2 grid/);
+  const blocks = obj.text.split(/^o /m).slice(1).map(b => {
+    const xs = [], zs = [];
+    for (const m of b.matchAll(/^v (\S+) \S+ (\S+)/gm)){ xs.push(+m[1]); zs.push(+m[2]); }
+    const mid = a => (Math.min(...a) + Math.max(...a)) / 2;
+    return { name: b.match(/^cell_-?\d+_-?\d+/)[0], x: mid(xs), z: mid(zs) };
+  });
+  assert.deepEqual(blocks.map(b => b.name), marked, 'marking order kept');
+  const slots = [[-1.3, -1.3], [1.3, -1.3], [-1.3, 1.3], [1.3, 1.3]];
+  blocks.forEach((b, n) => {
+    assert.ok(Math.abs(b.x - slots[n][0]) < 0.6 && Math.abs(b.z - slots[n][1]) < 0.6,
+      `${b.name} at ${b.x.toFixed(2)}, ${b.z.toFixed(2)} should sit in slot ${slots[n]}`);
+  });
+  assert.deepEqual(await s.evaluate(`window.__errors`), []);
+});
