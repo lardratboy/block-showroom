@@ -29,6 +29,8 @@ Run `npm run serve`, open http://localhost:8000/, then:
 16. Double-click two or three cells → a gold square appears inside each
     one's ring and the toast counts them; double-click one again to unmark
     it. `E` now downloads `bimoblock_marked_….obj` holding only the marked
-    specimens (open it: one `o cell_…` line per mark). `X` clears the marks,
+    specimens (open it: one `o cell_…` line per mark), packed into a square
+    grid in marking order — 4 marks make a 2 × 2, 16 a 4 × 4, 5 a 3 × 2
+    with one gap (drop the file into https://3dviewer.net to see it). `X` clears the marks,
     and `E` goes back to exporting every visible specimen.
     (Also covered by `test/browser/marks.test.js`.)

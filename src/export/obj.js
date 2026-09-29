@@ -64,12 +64,29 @@ export function exportSpecimenOBJ({ specimen, toast }){
   toast(`${specimenName(p)}.obj exported (${quads} quads)`);
 }
 
-/* A set of specimens exported flat on the lattice, each at its own cell, at
-   full resolution regardless of the LOD used on screen. `marked` says whether
-   `cells` is the marked set or everything currently standing in view. */
+/* Where each specimen of a sheet stands, as world { x, z }. The visible
+   sheet keeps every specimen at its own lattice cell. A marked set is
+   scattered across the lattice, so it is repacked into the squarest grid
+   that holds it — ceil(sqrt(n)) columns, row by row in marking order, one
+   lattice pitch apart and centred on the origin: 16 marks make a 4 × 4,
+   5 make a 3 × 2 with one slot empty. */
+export function sheetLayout(cells, marked){
+  if (!marked) return cells.map(({ i, j }) => ({ x: cellWorldX(i), z: cellWorldZ(j) }));
+  const cols = Math.ceil(Math.sqrt(cells.length)), rows = Math.ceil(cells.length / cols);
+  return cells.map((_, n) => ({
+    x: (n % cols - (cols - 1) / 2) * CFG.CELL,
+    z: (Math.floor(n / cols) - (rows - 1) / 2) * CFG.CELL
+  }));
+}
+
+/* A set of specimens exported flat, at full resolution regardless of the
+   LOD used on screen. `marked` says whether `cells` is the marked set
+   (packed into a square grid) or everything currently standing in view
+   (left where it stands); see sheetLayout(). */
 export function exportSheetOBJ({ rig, cells, marked, toast }){
+  const cols = Math.ceil(Math.sqrt(cells.length));
   const lines = [
-    marked ? `# bimoblock showroom — marked specimens (${cells.length})`
+    marked ? `# bimoblock showroom — marked specimens (${cells.length}) in a ${cols} × ${Math.ceil(cells.length / cols)} grid, in marking order`
            : `# bimoblock showroom — visible lattice sheet`,
     `# generated: ${new Date().toISOString()}`,
     `# centre cell: ${Math.round(rig.x / CFG.CELL)}, ${Math.round(-rig.z / CFG.CELL)}   generation: ${Mint.gen}`,
@@ -81,8 +98,9 @@ export function exportSheetOBJ({ rig, cells, marked, toast }){
 
   let vCount = 1, tris = 0, blocks = 0;
   const S = CFG.BLOCK_S;
+  const at = sheetLayout(cells, marked);
 
-  for (const { i, j, p } of cells){
+  for (const [n, { i, j, p }] of cells.entries()){
     // Expanded per specimen and dropped again, so the sheet never holds more
     // than one baked mesh at a time however many cells are standing.
     const mesh = Core.expandInstances(p.inst);
@@ -91,7 +109,7 @@ export function exportSheetOBJ({ rig, cells, marked, toast }){
     const verts = pos.length / 3;
     if (!verts) continue;
 
-    const ox = cellWorldX(i), oz = cellWorldZ(j), oy = S * 0.5 + 0.42;
+    const ox = at[n].x, oz = at[n].z, oy = S * 0.5 + 0.42;
     lines.push(`# symmetry mode: ${p.tierSymmetry ? 'independent address tiers' : 'coupled whole-grid'}; groups: ${symmetryLabel(p)}; radices: ${p.levels.map(l=>l.radix).join(',')}`);
     lines.push(`o cell_${i}_${j}_${symmetryLabel(p,true).replaceAll(' / ','-')}_${ARCH_NAMES[p.arch]}`);
     for (let k = 0; k < verts; k++){
