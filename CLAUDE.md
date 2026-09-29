@@ -18,7 +18,8 @@ being refactored into smaller modules per `refactorplan.md`.
   screenshots all twelve render × colour combinations and asserts on the
   pixels — specimen colouring and face occlusion live in a vertex shader,
   and a failed shader compile does not throw, it just draws nothing.
-  ~2 min, Node 22+, no dependencies (DevTools protocol over built-in
+  `marks.test.js` double-clicks to mark cells and reads the sheet OBJ back
+  by stubbing `URL.createObjectURL` in the page. ~2 min, Node 22+, no dependencies (DevTools protocol over built-in
   WebSocket). Skips if Chrome isn't installed.
 - `npm run golden` — regenerates `test/golden.json`. Only run this when a
   change to specimen output is *intended*, and say so in the commit message.
@@ -59,3 +60,7 @@ No bundler, no `node_modules`. Three.js r128 and Tween.js 18.6.4 come from cdnjs
 - Console diagnostics `showroomPerformance()` / `resetShowroomPerformance()`
   and URL params `?workers=0|1|2|4`, `?fullGeometry=1` are public surface.
 - The URL hash is a permalink: `#i,j,height,gen[,pinI.pinJ.radius]`.
+- Marks (`Marks` in `state.js`, double-click to toggle, `X` clears) are
+  addresses, not cache entries, and are not in the permalink. Batch
+  operations take the marked set when it is non-empty; the sheet export
+  builds a non-resident mark with `buildDetached()` (lattice/generation.js).

@@ -1,6 +1,6 @@
 /* SCENE — everything Three.js that exists exactly once: renderer, camera,
-   lights, the floor plate, the instanced pod rings and the focus/hover
-   rings. Per-frame placement of these lives in scene/layout.js; this
+   lights, the floor plate, the instanced pod rings and mark squares, and
+   the focus/hover rings. Per-frame placement of these lives in scene/layout.js; this
    class only builds and owns them. */
 import * as THREE from 'three';
 import { CFG, GROUP_RGB } from '../config.js';
@@ -87,6 +87,22 @@ export class ShowroomScene {
     pods.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     pods.setColorAt(0, GROUP_RGB[0]);
     scene.add(pods);
+
+    /* ---- marks --------------------------------------------------------
+       A square frame inside the pod ring of every marked cell. Four theta
+       segments started at 45° make RingGeometry an axis-aligned square;
+       the outer corners sit just inside the pod ring's inner edge. */
+    const squareGeo = new THREE.RingGeometry(0.50, 0.66, 4, 1, Math.PI / 4);
+    squareGeo.rotateX(-Math.PI / 2);
+    const marks = this.marks = new THREE.InstancedMesh(squareGeo, new THREE.MeshBasicMaterial({
+      color: 0xffd166, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+      side: THREE.DoubleSide, fog: false
+    }), CFG.POD_MAX);
+    marks.frustumCulled = false;
+    marks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    marks.count = 0;
+    scene.add(marks);
 
     this.focusRing = makeRing(scene, 1.02, 1.16, 0x00f5d4, 0.95);
     this.hoverRing = makeRing(scene, 1.02, 1.09, 0xff3ea5, 0.5);

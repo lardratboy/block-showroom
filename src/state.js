@@ -31,3 +31,9 @@ export const State = {
 export const Bloom = { on: false };
 export const Focus = { i:0, j:0 };
 export const Hover = { i:0, j:0, on:false };
+/* Cells marked for batch operations (the sheet export), toggled by double
+   click. Keyed by address "i,j" rather than by cache key: a mark names a
+   place on the lattice, and whatever stands there when the operation runs
+   is what gets processed — across re-mints and blooms alike. */
+/** @type {Map<string, {i:number, j:number}>} */
+export const Marks = new Map();

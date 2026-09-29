@@ -26,3 +26,9 @@ Run `npm run serve`, open http://localhost:8000/, then:
 15. Console: `showroomPerformance().residentBytes` — a few hundred KB for a
     few hundred specimens on the default preset, not tens of MB. Specimens
     are instanced, so a mode switch should not change it.
+16. Double-click two or three cells → a gold square appears inside each
+    one's ring and the toast counts them; double-click one again to unmark
+    it. `E` now downloads `bimoblock_marked_….obj` holding only the marked
+    specimens (open it: one `o cell_…` line per mark). `X` clears the marks,
+    and `E` goes back to exporting every visible specimen.
+    (Also covered by `test/browser/marks.test.js`.)
