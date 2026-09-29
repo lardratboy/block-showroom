@@ -1,18 +1,22 @@
 /* NAVIGATION INPUT — pointer, pinch and wheel on the render canvas.
    Drags move the rig directly (pan keeps the grabbed floor point under
    the cursor; shift/right/middle-drag orbits); a click that barely moved
-   is reported through onFocus. Idle motion updates the Hover cell. */
+   is reported through onFocus, and a second one on the same cell soon
+   after through onMark instead. Idle motion updates the Hover cell. */
 import * as THREE from 'three';
 import { CFG, clamp } from '../config.js';
 import { Hover } from '../state.js';
 
 export class Navigation {
-  /* `onFocus(i, j)` — a cell was clicked; `onOrbit()` — the tilt changed
-     by dragging, so any slider mirroring it can follow. */
-  constructor(rig, { onFocus, onOrbit }){
+  /* `onFocus(i, j)` — a cell was clicked; `onMark(i, j)` — double-clicked
+     (the first click has already focused it); `onOrbit()` — the tilt
+     changed by dragging, so any slider mirroring it can follow. */
+  constructor(rig, { onFocus, onMark, onOrbit }){
     this.rig = rig;
     this.onFocus = onFocus;
+    this.onMark = onMark;
     this.onOrbit = onOrbit;
+    this.lastTap = null;          // { i, j, t } of the previous click, for double clicks
     this.pointers = new Map();
     this.dragMode = null;         // 'pan' | 'orbit' | 'pinch'
     this.dragAnchor = null;
@@ -112,8 +116,19 @@ export class Navigation {
       if (moved < 5){
         rig.vx = rig.vz = 0;
         rig.ndcOf(e, _v2);
-        if (rig.groundAt(_v2.x, _v2.y, _hit))
-          this.onFocus(Math.round(_hit.x / CFG.CELL), Math.round(-_hit.z / CFG.CELL));
+        if (rig.groundAt(_v2.x, _v2.y, _hit)){
+          const i = Math.round(_hit.x / CFG.CELL), j = Math.round(-_hit.z / CFG.CELL);
+          // Detected here rather than with the DOM's dblclick so that touch
+          // gets it too, and a drag between the two presses never counts.
+          const t = performance.now(), last = this.lastTap;
+          if (last && last.i === i && last.j === j && t - last.t < 400){
+            this.lastTap = null;
+            this.onMark(i, j);
+          } else {
+            this.lastTap = { i, j, t };
+            this.onFocus(i, j);
+          }
+        }
       }
     }
     if (this.pointers.size < 2){ this.dragMode = null; this.dragAnchor = null; this.dragStart = null; }

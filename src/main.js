@@ -36,7 +36,7 @@ import * as THREE from 'three';
 import TWEEN from '@tweenjs/tween.js';
 import { Core } from './core/bimoblock-core.js';
 import { CFG } from './config.js';
-import { Pin, State, Bloom, Focus } from './state.js';
+import { Pin, State, Bloom, Focus, Marks } from './state.js';
 import { symmetryLabel } from './lattice/recipe.js';
 import { GenerationPool } from './lattice/generation.js';
 import { ShowroomScene } from './scene/scene.js';
@@ -123,12 +123,20 @@ function setFocus(i, j, announce){
   writeHash();
 }
 
+/* Double click: mark or unmark a cell for the batch operations (sheet export). */
+function toggleMark(i, j){
+  const key = i + ',' + j, had = Marks.delete(key);
+  if (!had) Marks.set(key, { i, j });
+  hud.showToast(`${had ? 'unmarked' : 'marked'} ${i}, ${j} · ${Marks.size} marked`);
+}
+
 /* ---- input ----------------------------------------------------------- */
 const controls = new Controls({ rig, virtualiser, hud, labels,
   actions: { setFocus, pinAt, unpin, flushLattice, applyConfiguration } });
 new LevelsEditor({ setStatus: text => hud.setStatus(text), onChange: applyConfiguration });
 const nav = new Navigation(rig, {
   onFocus: (i, j) => setFocus(i, j, true),
+  onMark: toggleMark,
   onOrbit: () => controls.setTiltSlider()
 });
 

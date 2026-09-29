@@ -16,6 +16,24 @@ import { Perf } from '../perf.js';
 
 const { levelResolution } = Core;
 
+/* What a build of cell (i,j) is given under the current settings. */
+function buildInput(i, j){
+  const rec = cellRecipe(i, j), levels = Tier.levels.map(l => ({...l}));
+  rec.P.tierSymmetry = Tier.symmetry;
+  return { rec, levels };
+}
+
+/* Build one cell on the main thread, outside the pool and the cache, for an
+   operation that needs a specimen nobody is looking at (a marked cell that
+   has been evicted, or never scrolled into view). Returns the recipe traits
+   plus `levels` and the instance record `inst`: enough for the exporters,
+   not a cache entry — it carries no GPU views.
+   @returns {Pick<import('../types.js').BlockData, 'levels'|'inst'> & import('../types.js').Recipe} */
+export function buildDetached(i, j){
+  const { rec, levels } = buildInput(i, j);
+  return { ...rec.P, levels, inst: Core.buildBlock(rec.P, levels).instances };
+}
+
 export class GenerationPool {
   constructor(virtualiser, rig, { workerCount }){
     this.virtualiser = virtualiser;
@@ -168,8 +186,7 @@ export class GenerationPool {
     const makeBuild = c => {
       const key = v.keyOf(c.i,c.j), token = this.token('build', key);
       if (v.cache.has(key) || this.pending.has(token) || (this.failures.get(token)?.tries || 0) >= 2) return null;
-      const rec = cellRecipe(c.i,c.j), levels = Tier.levels.map(l => ({...l})), R = levelResolution(levels);
-      rec.P.tierSymmetry = Tier.symmetry;
+      const { rec, levels } = buildInput(c.i, c.j), R = levelResolution(levels);
       return { type:'build', i:c.i, j:c.j, key, token, rec, levels,
         // Worst case every cell is occupied: a flat index, a face mask and an
         // orbit byte each, plus the occupancy grid and the axis centre table.

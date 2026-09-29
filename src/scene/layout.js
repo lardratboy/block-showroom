@@ -1,11 +1,11 @@
 /* PER-FRAME LAYOUT — places every visible specimen and its pod, picks
    full or proxy geometry by projected size, meters GPU uploads, and
-   dresses the scene (floor plate, fog, focus/hover rings). Deliberately a
-   function, not a class: it owns no state between frames beyond the
-   scratch objects below. Returns the triangle count submitted. */
+   dresses the scene (floor plate, fog, mark squares, focus/hover rings).
+   Deliberately a function, not a class: it owns no state between frames
+   beyond the scratch objects below. Returns the triangle count submitted. */
 import * as THREE from 'three';
 import { CFG, ROLE_BY_ID, GROUP_RGB, TAU } from '../config.js';
-import { Axis, Pin, State, Focus, Hover } from '../state.js';
+import { Axis, Pin, State, Focus, Hover, Marks } from '../state.js';
 import { specimenChiral, cellWorldX, cellWorldZ, hash32 } from '../lattice/recipe.js';
 import { setInstancingUniforms } from './instancing.js';
 import { Perf } from '../perf.js';
@@ -28,7 +28,7 @@ const isUploaded = g => { const o = g.userData && g.userData.owner; return !!o &
 /* `forceFullGeometry` (the ?fullGeometry=1 diagnostic) disables the proxy LOD. */
 export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
   const camera = rig.camera, v = virtualiser;
-  const { pods, floor, floorMat, scene, focusRing, hoverRing } = stage;
+  const { pods, marks, floor, floorMat, scene, focusRing, hoverRing } = stage;
   let frameTris = 0;
   let podCount = 0;
   let podMatricesChanged = false, podColorsChanged = false;
@@ -149,6 +149,24 @@ export function layout(t, dt, { rig, virtualiser, stage, forceFullGeometry }){
   pods.count = podCount;
   if (podMatricesChanged) pods.instanceMatrix.needsUpdate = true;
   if (podColorsChanged && pods.instanceColor) pods.instanceColor.needsUpdate = true;
+
+  // Mark squares: few, so loop over the marks rather than the lattice, and
+  // re-upload only when the marked-and-visible set (or the pitch) changes.
+  let markCount = 0, markSig = CFG.CELL + ';';
+  _s3.setScalar(CFG.CELL * 0.42); _q.identity();
+  for (const m of Marks.values()){
+    if (markCount >= CFG.POD_MAX) break;
+    if (!v.visKeys.has(v.keyOf(m.i, m.j))) continue;
+    _p3.set(cellWorldX(m.i), 0.018, cellWorldZ(m.j));
+    _m4.compose(_p3, _q, _s3);
+    marks.setMatrixAt(markCount++, _m4);
+    markSig += m.i + ',' + m.j + ';';
+  }
+  marks.count = markCount;
+  if (markSig !== marks.userData.sig){
+    marks.userData.sig = markSig;
+    marks.instanceMatrix.needsUpdate = true;
+  }
 
   // Floor plate rides the target; the grid stays welded to world space.
   const reach = 34 + rig.h * 4.2;

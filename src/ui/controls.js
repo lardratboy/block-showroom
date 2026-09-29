@@ -5,9 +5,10 @@
    through the `actions` the composition root supplies. */
 import { Core } from '../core/bimoblock-core.js';
 import { CFG, ROLES, clamp } from '../config.js';
-import { Axis, Filter, Mint, Pin, State, Bloom, Focus } from '../state.js';
+import { Axis, Filter, Mint, Pin, State, Bloom, Focus, Marks } from '../state.js';
 import { symmetryLabel, cellWorldX, cellWorldZ } from '../lattice/recipe.js';
 import { exportSpecimenOBJ, exportSheetOBJ } from '../export/obj.js';
+import { buildDetached } from '../lattice/generation.js';
 import { writeHash, commitHash, hashString } from './permalink.js';
 import { initTabs } from './tabs.js';
 
@@ -219,6 +220,7 @@ export class Controls {
         case 'o': case 'O': this.exportSpecimen(); break;
         case 'e': case 'E': this.exportSheet(); break;
         case 'c': case 'C': this.copyAddress(); break;
+        case 'x': case 'X': this.clearMarks(); break;
       }
     });
 
@@ -257,9 +259,21 @@ export class Controls {
   exportSpecimen(){
     exportSpecimenOBJ({ specimen: this.virtualiser.at(Focus.i, Focus.j), toast: m => this.hud.showToast(m) });
   }
+  /* The marked cells if there are any, otherwise everything in view. A mark
+     that is not resident (evicted, or never on screen) is built on the spot,
+     so the export never silently drops one; unminted visible cells are
+     simply skipped, as they always were. */
   exportSheet(){
-    const v = this.virtualiser;
-    exportSheetOBJ({ rig: this.rig, visible: v.visible, cache: v.cache, toast: m => this.hud.showToast(m) });
+    const v = this.virtualiser, marked = Marks.size > 0;
+    const cells = marked
+      ? [...Marks.values()].map(({ i, j }) => ({ i, j, p: v.at(i, j) || buildDetached(i, j) }))
+      : v.visible.map(({ i, j, key }) => ({ i, j, p: v.cache.get(key) })).filter(c => c.p);
+    exportSheetOBJ({ rig: this.rig, cells, marked, toast: m => this.hud.showToast(m) });
+  }
+  clearMarks(){
+    const n = Marks.size;
+    Marks.clear();
+    this.hud.showToast(n ? `cleared ${n} mark${n === 1 ? '' : 's'}` : 'nothing marked');
   }
   copyAddress(){
     const rig = this.rig, showToast = m => this.hud.showToast(m);
