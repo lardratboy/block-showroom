@@ -11,7 +11,7 @@ export const Mint   = { gen:0, density:0.25 };
    reassigned wholesale by the presets, hence the wrapper object. */
 export const Tier = {
   /** @type {import('./types.js').Level[]} */
-  levels: [{ radix:3, gap:0.30 }, { radix:3, gap:0.06 }],
+  levels: [{ radix:9, gap:0.0 }],
   symmetry: false
 };
 

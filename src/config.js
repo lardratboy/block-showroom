@@ -53,7 +53,7 @@ export const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 export const MAX_R = 64;
 
 export const PRESETS = {
-  classic: [{radix:3,gap:0.30},{radix:3,gap:0.06}],
+  classic: [{radix:9,gap:0.0}],
   tower3:  [{radix:3,gap:0.35},{radix:3,gap:0.12},{radix:3,gap:0.04}],
   tower4:  [{radix:2,gap:0.35},{radix:2,gap:0.20},{radix:2,gap:0.10},{radix:2,gap:0.04}],
   hetero:  [{radix:4,gap:0.30},{radix:3,gap:0.14},{radix:2,gap:0.05}],
