@@ -27,3 +27,4 @@ somewhere unusual); it skips itself if none is found. No `npm install`.
 ## Screenshot
 
 ![Screenshot](https://github.com/lardratboy/block-showroom/blob/main/images/window.jpg?raw=true)
+![Screenshot](https://github.com/lardratboy/block-showroom/blob/main/images/window2.jpg?raw=true)
