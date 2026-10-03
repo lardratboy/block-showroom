@@ -24,6 +24,6 @@ the `?workers=0` fallback path. Takes about 20 s. Needs Node 22+ and an
 installed Google Chrome (set `SHOWROOM_CHROME=/path/to/chrome` if it is
 somewhere unusual); it skips itself if none is found. No `npm install`.
 
-## Refactor status
+## Screenshot
 
-See `refactorplan.md`.
+![Screenshot](https://github.com/lardratboy/block-showroom/blob/main/images/window.jpg?raw=true)
